@@ -2,9 +2,40 @@
 
 ## What this project is
 
-TODO: one paragraph describing the app.
+Patch is a JMP.chat-first phone client for GNOME mobile. The user types
+phone numbers, sees SMS conversations, hears voicemails — XMPP is the
+transport, hidden as an implementation detail. The push path is
+self-hosted: a companion Prosody module (`mod_cloud_notify_unifiedpush`)
+encrypts XEP-0357 push notifications per RFC 8291 and ships them via
+UnifiedPush + a self-hosted ntfy to KUnifiedPush on the phone, which
+hands them off to this app over D-Bus.
 
 App ID: `land.rob.patch`. License: GPL-3.0-or-later.
+
+## Phase status
+
+- **Phase 0** ✅ Three-tab AdwViewSwitcher skeleton, dialpad UI, libsecret
+  credential storage, JID ↔ E.164 round-trip for cheogram gateways.
+- **Phase 1** ✅ XMPP messaging via `nbxmpp` (GLib mainloop-native, no
+  asyncio worker thread). Conversation list + thread view + compose.
+  Cheogram group-SMS body parsing. SQLite cache for offline display.
+- **Phase 2** ✅ UnifiedPush receiver. `org.unifiedpush.Connector1`
+  D-Bus service, distributor discovery + registration, P-256 keypair
+  generation, XEP-0357 enable IQ with our publish_options form, RFC
+  8291 decryption. D-Bus activation `.service` file installed so
+  dbus-daemon can cold-start Patch when a push arrives.
+- **Phase 3** Jingle calls via `xmpp-vala` (vendored). Not started.
+- **Phase 4+** see `PATCH.md` in the xmpp-up repo for the design doc.
+
+## Companion server module
+
+`mod_cloud_notify_unifiedpush` lives at
+`/home/rob/projects/xmpp-up/prosody-mod-cloud-notify-unifiedpush/` and
+is deployed by the Selfhost ansible role
+(`selfhost/ansible/roles/prosody/`). It loads on `chat.rob.land` and
+shares the RFC 8291 wire format with the `push/decrypt.py` here; both
+halves pass the RFC 8291 §5 test vector (run `tests/test_decrypt.py`
+in this repo, and `tests/test_rfc8291.lua` in the prosody module repo).
 
 ## Code quality
 
