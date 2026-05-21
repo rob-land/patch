@@ -1,0 +1,75 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $PatchPreferencesDialog: Adw.PreferencesDialog {
+  title: _("Preferences");
+
+  Adw.PreferencesPage {
+    icon-name: "preferences-system-symbolic";
+    title: _("General");
+
+    Adw.PreferencesGroup {
+      title: _("Account");
+      description: _("Your JMP / XMPP account.");
+
+      Adw.ActionRow account_row {
+        title: _("Account…");
+        activatable: true;
+        action-name: "app.account";
+
+        [suffix]
+        Gtk.Image {
+          icon-name: "go-next-symbolic";
+        }
+      }
+    }
+
+    Adw.PreferencesGroup {
+      title: _("Push notifications");
+      description: _("Self-hosted UnifiedPush via Prosody's mod_cloud_notify_unifiedpush.\nKill the app and you should still wake on incoming messages.");
+
+      Adw.ActionRow distributor_row {
+        title: _("Active distributor");
+        subtitle: _("(probed at startup)");
+
+        [suffix]
+        Gtk.Image {
+          icon-name: "emblem-default-symbolic";
+        }
+      }
+
+      Adw.ActionRow endpoint_row {
+        title: _("Push endpoint");
+        subtitle-lines: 2;
+      }
+    }
+
+    Adw.PreferencesGroup {
+      title: _("Debug");
+
+      Adw.ActionRow log_path_row {
+        title: _("Log file");
+        subtitle-lines: 2;
+
+        [suffix]
+        Gtk.Button {
+          icon-name: "folder-open-symbolic";
+          tooltip-text: _("Open log directory");
+          action-name: "app.show-log";
+          valign: center;
+          styles ["flat"]
+        }
+      }
+    }
+  }
+
+  Adw.PreferencesPage {
+    icon-name: "phone-symbolic";
+    title: _("Calls");
+
+    Adw.PreferencesGroup {
+      title: _("Audio");
+      description: _("Call audio (XEP-0166 Jingle) is not wired up yet. JMI signalling works so the call screen surfaces — but you won't hear or be heard until the Jingle audio pipeline lands.");
+    }
+  }
+}

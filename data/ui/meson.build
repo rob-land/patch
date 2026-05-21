@@ -8,6 +8,7 @@ blueprint_sources = files(
   'voicemail.blp',
   'account-dialog.blp',
   'call-dialog.blp',
+  'preferences-dialog.blp',
 )
 
 blueprints = custom_target('blueprints',

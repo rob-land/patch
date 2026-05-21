@@ -19,13 +19,43 @@ App ID: `land.rob.patch`. License: GPL-3.0-or-later.
 - **Phase 1** ✅ XMPP messaging via `nbxmpp` (GLib mainloop-native, no
   asyncio worker thread). Conversation list + thread view + compose.
   Cheogram group-SMS body parsing. SQLite cache for offline display.
-- **Phase 2** ✅ UnifiedPush receiver. `org.unifiedpush.Connector1`
-  D-Bus service, distributor discovery + registration, P-256 keypair
-  generation, XEP-0357 enable IQ with our publish_options form, RFC
-  8291 decryption. D-Bus activation `.service` file installed so
-  dbus-daemon can cold-start Patch when a push arrives.
-- **Phase 3** Jingle calls via `xmpp-vala` (vendored). Not started.
-- **Phase 4+** see `PATCH.md` in the xmpp-up repo for the design doc.
+- **Phase 1.5** ✅ Reconnection with exponential backoff + Adw.Banner
+  status surface, desktop notifications on inbound messages, MAM
+  catch-up on connect (off by default — nbxmpp 7.2 parse-finished bug
+  on large batches; opt in with `PATCH_MAM_CATCHUP=1`), Send Message
+  shortcut on the dialer for new conversations.
+- **Phase 2** ✅ UnifiedPush receiver — full end-to-end including the
+  cold-start activation race fix. `org.unifiedpush.Connector1` D-Bus
+  service, distributor discovery + registration, P-256 keypair in
+  libsecret, XEP-0357 enable IQ with our publish_options form, RFC
+  8291 decryption, D-Bus activation `.service`. Verified against
+  chat.rob.land → ntfy.kde.org → KUnifiedPush → flatpak wake from
+  cold in ~11s.
+- **Phase 3** ✅ Outgoing calls — XEP-0353 JMI propose/proceed/accept/
+  reject/retract through `xmpp/client.py`, in-process `CallSession`
+  state machine + `Adw.Dialog` call screen. Audio is unwired (no
+  Jingle session-initiate yet) — needs xmpp-vala or equivalent.
+- **Phase 4** Incoming Jingle audio — not started.
+- **Phase 5** ✅ Outgoing calls (signalling only — audio side as above).
+- **Phase 6** ✅ MMS — inbound XEP-0066 OOB image rendering inline in
+  the conversation, outbound attach button → XEP-0363 HTTP upload →
+  PUT → send with OOB.
+- **Phase 7** ✅ Voicemail — `recent_voicemails()` filter on audio
+  extensions, `Adw.ExpanderRow` per voicemail with `Gtk.MediaControls`
+  inline streaming via `Gtk.MediaFile.new_for_file(uri)`.
+- **Phase 8** Polish — partial. Recent-calls list in dialer, libfolks
+  contact-name resolution, persisted call log, status banner. Still
+  TODO: real app icon, proper Preferences dialog (currently aliased
+  to Account), DTMF, ringer integration via libfeedback, MAM
+  pagination fix.
+
+## Sibling pieces
+
+- `plugin/` — scaffold of a future gnome-calls C plugin (libpeas-2
+  shared module). Stubs that compile against `libcalls` on a Phosh
+  target; lays out `CallsProvider`/`CallsOrigin`/`CallsCall` and
+  documents the `land.rob.patch.Calls1` D-Bus surface Patch will
+  expose for it to drive.
 
 ## Companion server module
 

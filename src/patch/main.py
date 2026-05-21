@@ -12,6 +12,7 @@ from patch.calls import CallManager
 from patch.contacts import ContactsManager
 from patch.dialogs.account_dialog import PatchAccountDialog
 from patch.dialogs.call_dialog import PatchCallDialog
+from patch.dialogs.preferences_dialog import PatchPreferencesDialog
 from patch.logging_setup import configure_logging
 from patch.notifications import NotificationManager
 from patch.push.controller import PushController
@@ -68,7 +69,8 @@ class PatchApplication(Adw.Application):
         for name, handler in (
             ("about",       self._show_about),
             ("account",     self._show_account_dialog),
-            ("preferences", self._show_account_dialog),
+            ("preferences", self._show_preferences),
+            ("show-log",    self._show_log),
             ("connect",     lambda *_: self._xmpp.connect_to_server()),
             ("disconnect",  lambda *_: self._xmpp.disconnect_from_server()),
             ("quit",        lambda *_: self.quit()),
@@ -124,6 +126,19 @@ class PatchApplication(Adw.Application):
     def _show_account_dialog(self, *_):
         dialog = PatchAccountDialog(self._account)
         dialog.present(self.props.active_window)
+
+    def _show_preferences(self, *_):
+        dialog = PatchPreferencesDialog()
+        dialog.present(self.props.active_window)
+
+    def _show_log(self, *_):
+        from patch.logging_setup import log_dir
+        from gi.repository import Gio
+        try:
+            Gio.AppInfo.launch_default_for_uri(
+                "file://" + log_dir(), None)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not open log dir: %s", exc)
 
     def _on_call_started(self, _manager, session, _direction):
         win = self.props.active_window

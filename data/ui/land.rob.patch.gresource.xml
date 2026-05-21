@@ -8,5 +8,6 @@
     <file preprocess="xml-stripblanks" alias="ui/voicemail.ui">voicemail.ui</file>
     <file preprocess="xml-stripblanks" alias="ui/account-dialog.ui">account-dialog.ui</file>
     <file preprocess="xml-stripblanks" alias="ui/call-dialog.ui">call-dialog.ui</file>
+    <file preprocess="xml-stripblanks" alias="ui/preferences-dialog.ui">preferences-dialog.ui</file>
   </gresource>
 </gresources>
