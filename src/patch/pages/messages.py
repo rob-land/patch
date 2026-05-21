@@ -43,11 +43,12 @@ class PatchMessagesPage(Adw.Bin):
     send_button:       Gtk.Button         = Gtk.Template.Child()
     attach_button:     Gtk.Button         = Gtk.Template.Child()
 
-    def __init__(self, account, store, xmpp):
+    def __init__(self, account, store, xmpp, contacts=None):
         super().__init__()
         self._account = account
         self._store = store
         self._xmpp = xmpp
+        self._contacts = contacts
         self._open_jid: str | None = None
         # Track whether the thread view is currently visible (not just
         # the conversation that was last navigated to). NotificationManager
@@ -70,6 +71,11 @@ class PatchMessagesPage(Adw.Bin):
         # come through the same signal so the conversation list updates
         # without a round-trip via MAM.
         self._xmpp.connect("message-received", self._on_message_received)
+        # When the contacts index rebuilds, redraw the conversation list
+        # so number-only rows pick up the freshly-resolved name.
+        if self._contacts is not None:
+            self._contacts.connect("index-changed",
+                                   lambda *_: self._refresh_conversation_list())
 
         self._refresh_conversation_list()
 
@@ -336,13 +342,19 @@ class PatchMessagesPage(Adw.Bin):
     # -- display helpers --------------------------------------------------
 
     def _display_name_for(self, jid: str, gateway: str) -> str:
-        # For cheogram-style group JIDs, render as a list of formatted numbers.
+        # For cheogram-style group JIDs, render as a list of formatted
+        # numbers (with contact-name substitution per participant).
         if numfmt.is_group_jid(jid):
             local = jid.partition("@")[0]
-            return ", ".join(numfmt.format_for_display(n) for n in local.split(","))
+            parts = []
+            for n in local.split(","):
+                name = self._contacts.lookup(n) if self._contacts else None
+                parts.append(name or numfmt.format_for_display(n))
+            return ", ".join(parts)
         number = numfmt.jid_to_number(jid, gateway)
         if number:
-            return numfmt.format_for_display(number)
+            name = self._contacts.lookup(number) if self._contacts else None
+            return name or numfmt.format_for_display(number)
         return jid
 
 

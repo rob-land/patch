@@ -9,6 +9,7 @@ from patch import APP_ID
 from patch import account as account_mod
 from patch.account import Account
 from patch.calls import CallManager
+from patch.contacts import ContactsManager
 from patch.dialogs.account_dialog import PatchAccountDialog
 from patch.dialogs.call_dialog import PatchCallDialog
 from patch.logging_setup import configure_logging
@@ -37,7 +38,9 @@ class PatchApplication(Adw.Application):
         self._account       = Account()
         self._store         = MessageStore()
         self._xmpp          = XmppClient(self._account, store=self._store)
-        self._calls         = CallManager(self._account, self._xmpp)
+        self._contacts      = ContactsManager(self._account)
+        self._calls         = CallManager(self._account, self._xmpp,
+                                          contacts=self._contacts)
         self._push          = PushController(self._account, self._xmpp)
         # Auto-present the call dialog when a new session starts. Lives
         # on the Application (not the window) so cold-start activated
@@ -58,6 +61,7 @@ class PatchApplication(Adw.Application):
             self, self._account, self._xmpp,
             window_provider=lambda: self.props.active_window,
             focus_provider=self._focused_jid,
+            contacts=self._contacts,
         )
 
         for name, handler in (
@@ -87,6 +91,9 @@ class PatchApplication(Adw.Application):
         # distributor. Safe in both the foreground launch path and the
         # --gapplication-service cold-start activated by dbus-daemon.
         self._push.start_registration()
+        # Folks aggregator prep — index builds asynchronously and the
+        # UI re-renders once contacts-index-changed fires.
+        self._contacts.start()
 
     def do_activate(self):
         win = self.props.active_window
@@ -95,7 +102,8 @@ class PatchApplication(Adw.Application):
                               account=self._account,
                               store=self._store,
                               xmpp=self._xmpp,
-                              calls=self._calls)
+                              calls=self._calls,
+                              contacts=self._contacts)
         win.present()
         if not self._account.is_configured:
             self._show_account_dialog()

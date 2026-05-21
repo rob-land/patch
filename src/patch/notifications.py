@@ -25,7 +25,8 @@ log = logging.getLogger(__name__)
 class NotificationManager:
     """Bridges XMPP message arrival to Gio.Notification with sensible gating."""
 
-    def __init__(self, app, account, xmpp, window_provider, focus_provider):
+    def __init__(self, app, account, xmpp, window_provider, focus_provider,
+                 contacts=None):
         """Constructor.
 
         Arguments
@@ -44,6 +45,7 @@ class NotificationManager:
         self._xmpp = xmpp
         self._window_provider = window_provider
         self._focus_provider = focus_provider
+        self._contacts = contacts
 
         # GSimpleAction the notification "tap" target activates. The Gio
         # notification machinery routes app.<name> through Gio.Application
@@ -91,7 +93,7 @@ class NotificationManager:
         return self._focus_provider() == remote_jid
 
     def _fire_notification(self, remote_jid: str, body: str) -> None:
-        title = _display_name(remote_jid, self._account.gateway)
+        title = _display_name(remote_jid, self._account.gateway, self._contacts)
         notif = Gio.Notification.new(title)
         notif.set_body(_truncate(body, 240))
         # icon: hint at messages rather than a generic app icon
@@ -108,13 +110,18 @@ class NotificationManager:
         log.debug("notification fired for %s", remote_jid)
 
 
-def _display_name(jid: str, gateway: str) -> str:
+def _display_name(jid: str, gateway: str, contacts=None) -> str:
     if numfmt.is_group_jid(jid):
         local = jid.partition("@")[0]
-        return ", ".join(numfmt.format_for_display(n) for n in local.split(","))
+        parts = []
+        for n in local.split(","):
+            name = contacts.lookup(n) if contacts else None
+            parts.append(name or numfmt.format_for_display(n))
+        return ", ".join(parts)
     number = numfmt.jid_to_number(jid, gateway)
     if number:
-        return numfmt.format_for_display(number)
+        name = contacts.lookup(number) if contacts else None
+        return name or numfmt.format_for_display(number)
     return jid
 
 

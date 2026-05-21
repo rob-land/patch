@@ -25,13 +25,15 @@ class PatchWindow(Adw.ApplicationWindow):
     toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()
     status_banner: Adw.Banner       = Gtk.Template.Child()
 
-    def __init__(self, application, account, store, xmpp, calls, **kwargs):
+    def __init__(self, application, account, store, xmpp, calls, contacts,
+                 **kwargs):
         super().__init__(application=application, **kwargs)
         self._settings = Gio.Settings.new(APP_ID)
         self._account = account
         self._store = store
         self._xmpp = xmpp
         self._calls = calls
+        self._contacts = contacts
 
         # Persisted window geometry. get_default_size() returns the
         # configured default, not the live size — get_width/height per
@@ -74,7 +76,8 @@ class PatchWindow(Adw.ApplicationWindow):
         # account-only for now. Keep a direct reference to the messages
         # page so notification-tap navigation can call into it.
         self._dialer_page    = PatchDialerPage(self._account)
-        self._messages_page  = PatchMessagesPage(self._account, self._store, self._xmpp)
+        self._messages_page  = PatchMessagesPage(self._account, self._store,
+                                                  self._xmpp, self._contacts)
         self._voicemail_page = PatchVoicemailPage(self._account)
         pages = [self._dialer_page, self._messages_page, self._voicemail_page]
         for page in pages:

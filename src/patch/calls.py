@@ -79,10 +79,11 @@ class CallManager(GObject.Object):
         "call-ended":     (GObject.SignalFlags.RUN_FIRST, None, (object,)),
     }
 
-    def __init__(self, account, xmpp):
+    def __init__(self, account, xmpp, contacts=None):
         super().__init__()
         self._account = account
         self._xmpp = xmpp
+        self._contacts = contacts
         self._session: CallSession | None = None
 
         self._xmpp.connect("jmi-event", self._on_jmi)
@@ -199,5 +200,6 @@ class CallManager(GObject.Object):
     def _label_for(self, jid: str) -> str:
         number = numfmt.jid_to_number(jid, self._account.gateway)
         if number:
-            return numfmt.format_for_display(number)
+            name = self._contacts.lookup(number) if self._contacts else None
+            return name or numfmt.format_for_display(number)
         return jid

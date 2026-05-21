@@ -15,6 +15,7 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 gi.require_version('Secret', '1')
 gi.require_version('Soup', '3.0')
+gi.require_version('Folks', '0.7')
 from gi.repository import Gio
 
 resource_path = os.path.join(pkgdatadir, '@APP_ID@.gresource')

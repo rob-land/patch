@@ -21,6 +21,7 @@ python.install_sources(
     '__main__.py',
     'account.py',
     'calls.py',
+    'contacts.py',
     'logging_setup.py',
     'main.py',
     'notifications.py',
