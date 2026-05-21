@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Patch
+GenericName=Patch
+Comment=A native GNOME application
+Exec=patch
+Icon=land.rob.patch
+Terminal=false
+Type=Application
+Categories=GTK;
+StartupNotify=true
+StartupWMClass=land.rob.patch

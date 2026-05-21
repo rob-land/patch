@@ -1,0 +1,5 @@
+data/land.rob.patch.desktop.in
+data/land.rob.patch.metainfo.xml.in
+data/ui/window.blp
+data/ui/help-overlay.blp
+src/patch/window.py

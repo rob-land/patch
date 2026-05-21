@@ -1,0 +1,45 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $PatchWindow: Adw.ApplicationWindow {
+  title: _("Patch");
+  default-width: 640;
+  default-height: 480;
+  width-request: 360;
+  height-request: 360;
+
+  content: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      title-widget: Adw.WindowTitle window_title {
+        title: _("Patch");
+      };
+
+      [end]
+      MenuButton {
+        icon-name: "open-menu-symbolic";
+        primary: true;
+        menu-model: primary_menu;
+        tooltip-text: _("Main Menu");
+      }
+    }
+
+    content: Adw.StatusPage {
+      icon-name: "land.rob.patch";
+      title: _("Hello, Patch");
+      description: _("Replace this with the real first view.");
+    };
+  };
+}
+
+menu primary_menu {
+  item {
+    label: _("Keyboard Shortcuts");
+    action: "win.show-help-overlay";
+  }
+
+  item {
+    label: _("About Patch");
+    action: "app.about";
+  }
+}

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>land.rob.patch</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Patch</name>
+  <summary>A native GNOME application</summary>
+  <description>
+    <p>TODO: write a real description before shipping.</p>
+  </description>
+  <launchable type="desktop-id">land.rob.patch.desktop</launchable>
+  <developer_name>Rob</developer_name>
+  <url type="homepage">https://codeberg.org/robland/patch</url>
+  <url type="bugtracker">https://codeberg.org/robland/patch/issues</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.1.0" date="2026-05-21">
+      <description>
+        <p>Initial scaffold.</p>
+      </description>
+    </release>
+  </releases>
+</component>
