@@ -80,7 +80,10 @@ class PatchWindow(Adw.ApplicationWindow):
                                                 calls=self._calls)
         self._messages_page  = PatchMessagesPage(self._account, self._store,
                                                   self._xmpp, self._contacts)
-        self._voicemail_page = PatchVoicemailPage(self._account)
+        self._voicemail_page = PatchVoicemailPage(self._account,
+                                                    store=self._store,
+                                                    xmpp=self._xmpp,
+                                                    contacts=self._contacts)
         pages = [self._dialer_page, self._messages_page, self._voicemail_page]
         for page in pages:
             props = page.get_page_props()

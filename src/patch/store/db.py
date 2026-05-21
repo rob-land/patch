@@ -196,6 +196,29 @@ class MessageStore:
                     c["last_incoming"] = bool(row["incoming"])
             return convs
 
+    # JMP voicemails arrive as chat messages from a cheogram-style JID
+    # carrying an audio OOB attachment + the transcript in the body.
+    # We detect by URL extension at query time so we don't need a
+    # dedicated column; the cohort prefers heuristics over schema for
+    # JMP-specific shapes since the wire format isn't stable.
+    _VOICEMAIL_EXTS = ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".oga"
+
+    def recent_voicemails(self, limit: int = 50) -> list[dict]:
+        with self._cursor() as cur:
+            ext_clause = " OR ".join(
+                "LOWER(attachment_url) LIKE ?" for _ in self._VOICEMAIL_EXTS)
+            params = ["%" + ext + "%" for ext in self._VOICEMAIL_EXTS] + [limit]
+            cur.execute(f"""
+                SELECT id, remote_jid, body, attachment_url, timestamp, read
+                FROM   messages
+                WHERE  attachment_url IS NOT NULL
+                  AND  incoming = 1
+                  AND  ({ext_clause})
+                ORDER  BY timestamp DESC
+                LIMIT  ?
+            """, params)
+            return [dict(r) for r in cur.fetchall()]
+
     def thread(self, remote_jid: str, limit: int = 200) -> list[dict]:
         """Return messages for a conversation, oldest first."""
         with self._cursor() as cur:

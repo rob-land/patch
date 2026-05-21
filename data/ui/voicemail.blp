@@ -11,7 +11,7 @@ template $PatchVoicemailPage: Adw.Bin {
       child: Adw.StatusPage {
         icon-name: "media-record-symbolic";
         title: _("No voicemails");
-        description: _("Voicemails delivered by JMP appear here\nwith transcripts and audio playback.");
+        description: _("Voicemails delivered by JMP arrive here\nwith their transcript and inline audio playback.");
       };
     }
 
@@ -22,8 +22,12 @@ template $PatchVoicemailPage: Adw.Bin {
         hscrollbar-policy: never;
 
         child: Gtk.ListBox voicemail_list {
-          selection-mode: single;
+          selection-mode: none;
           styles ["boxed-list"]
+          margin-start: 12;
+          margin-end: 12;
+          margin-top: 8;
+          margin-bottom: 8;
         };
       };
     }
