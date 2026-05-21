@@ -1,19 +1,36 @@
-from gi.repository import Adw, Gio, Gtk
+from __future__ import annotations
+
+import logging
+
+from gi.repository import Adw, Gio, GLib, Gtk
 
 from patch import APP_ID
+from patch.pages.dialer    import PatchDialerPage
+from patch.pages.messages  import PatchMessagesPage
+from patch.pages.voicemail import PatchVoicemailPage
+
+log = logging.getLogger(__name__)
 
 
 @Gtk.Template(resource_path="/land/rob/patch/ui/window.ui")
 class PatchWindow(Adw.ApplicationWindow):
     __gtype_name__ = "PatchWindow"
 
-    window_title: Adw.WindowTitle = Gtk.Template.Child()
+    view_stack:    Adw.ViewStack    = Gtk.Template.Child()
+    view_switcher: Adw.ViewSwitcher = Gtk.Template.Child()
+    view_switcher_bar: Adw.ViewSwitcherBar = Gtk.Template.Child()
+    title_stack:   Gtk.Stack        = Gtk.Template.Child()
+    window_title:  Adw.WindowTitle  = Gtk.Template.Child()
+    toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, application, account, **kwargs):
+        super().__init__(application=application, **kwargs)
         self._settings = Gio.Settings.new(APP_ID)
+        self._account = account
 
-        # Restore persisted geometry.
+        # Persisted window geometry. get_default_size() returns the
+        # configured default, not the live size — get_width/height per
+        # STYLE_GUIDE so user resizes actually save.
         self.set_default_size(
             self._settings.get_int("window-width"),
             self._settings.get_int("window-height"),
@@ -22,14 +39,30 @@ class PatchWindow(Adw.ApplicationWindow):
             self.maximize()
         self.connect("close-request", self._on_close_request)
 
-        action = Gio.SimpleAction.new("show-help-overlay", None)
-        action.connect("activate", self._show_help_overlay)
-        self.add_action(action)
+        # Help-overlay action — needed for the menu entry and Ctrl-?.
+        help_action = Gio.SimpleAction.new("show-help-overlay", None)
+        help_action.connect("activate", self._show_help_overlay)
+        self.add_action(help_action)
+
+        # Window-scoped action that any child page can fire to surface a
+        # toast. Used by the dialer for "invalid number" etc.
+        toast_action = Gio.SimpleAction.new("toast", GLib.VariantType.new("s"))
+        toast_action.connect("activate", self._on_toast)
+        self.add_action(toast_action)
+
+        # -- pages --------------------------------------------------------
+        for page_cls in (PatchDialerPage, PatchMessagesPage, PatchVoicemailPage):
+            page = page_cls(self._account)
+            props = page.get_page_props()
+            stack_page = self.view_stack.add_titled_with_icon(
+                page, props["name"], props["title"], props["icon_name"],
+            )
+            # Defer to ViewStack default semantics for visibility / badges.
+            stack_page.set_use_underline(True)
+
+    # -- handlers ---------------------------------------------------------
 
     def _on_close_request(self, *_):
-        # `get_default_size()` returns the configured default, not the
-        # live size; use `get_width()`/`get_height()` so user resizes
-        # actually persist.
         if not self.is_maximized():
             self._settings.set_int("window-width",  self.get_width())
             self._settings.set_int("window-height", self.get_height())
@@ -42,3 +75,7 @@ class PatchWindow(Adw.ApplicationWindow):
         overlay = builder.get_object("help_overlay")
         overlay.set_transient_for(self)
         overlay.present()
+
+    def _on_toast(self, _action, param):
+        msg = param.get_string()
+        self.toast_overlay.add_toast(Adw.Toast.new(msg))

@@ -1,0 +1,188 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $PatchDialerPage: Adw.Bin {
+  child: Gtk.Box {
+    orientation: vertical;
+    spacing: 0;
+
+    // ---- Top: recent calls -----------------------------------------------
+    Adw.Bin recent_container {
+      vexpand: true;
+
+      child: Gtk.ScrolledWindow {
+        hscrollbar-policy: never;
+
+        child: Gtk.Stack recent_stack {
+          transition-type: crossfade;
+
+          Gtk.StackPage {
+            name: "empty";
+
+            child: Adw.StatusPage {
+              icon-name: "call-start-symbolic";
+              title: _("No recent calls");
+              description: _("Calls you make and miss appear here.");
+            };
+          }
+
+          Gtk.StackPage {
+            name: "list";
+
+            child: Gtk.Box {
+              orientation: vertical;
+              margin-start: 12;
+              margin-end: 12;
+              margin-top: 8;
+              margin-bottom: 8;
+
+              Gtk.ListBox recent_list {
+                selection-mode: none;
+                styles ["boxed-list"]
+              }
+            };
+          }
+        };
+      };
+    }
+
+    // ---- Bottom: number display + dialpad --------------------------------
+    Gtk.Box {
+      orientation: vertical;
+      margin-start: 12;
+      margin-end: 12;
+      margin-top: 4;
+      margin-bottom: 8;
+      spacing: 8;
+
+      // Live number display. Doubles as a target for paste/edit.
+      Gtk.Entry number_entry {
+        placeholder-text: _("Enter number");
+        xalign: 0.5;
+        styles ["title-1", "flat"]
+      }
+
+      // 3×4 dialpad. action-target=<digit string> dispatches into the
+      // page-level "patch.dial-digit(s)" action so we can keep one
+      // handler instead of twelve.
+      Gtk.Grid dialpad {
+        row-spacing: 8;
+        column-spacing: 8;
+        column-homogeneous: true;
+        row-homogeneous: true;
+        height-request: 320;
+
+        Gtk.Button {
+          label: "1";
+          action-name: "patch.dial-digit";
+          action-target: "\"1\"";
+          styles ["pill", "card"]
+          layout { column: 0; row: 0; }
+        }
+        Gtk.Button {
+          label: "2";
+          action-name: "patch.dial-digit";
+          action-target: "\"2\"";
+          styles ["pill", "card"]
+          layout { column: 1; row: 0; }
+        }
+        Gtk.Button {
+          label: "3";
+          action-name: "patch.dial-digit";
+          action-target: "\"3\"";
+          styles ["pill", "card"]
+          layout { column: 2; row: 0; }
+        }
+
+        Gtk.Button {
+          label: "4";
+          action-name: "patch.dial-digit";
+          action-target: "\"4\"";
+          styles ["pill", "card"]
+          layout { column: 0; row: 1; }
+        }
+        Gtk.Button {
+          label: "5";
+          action-name: "patch.dial-digit";
+          action-target: "\"5\"";
+          styles ["pill", "card"]
+          layout { column: 1; row: 1; }
+        }
+        Gtk.Button {
+          label: "6";
+          action-name: "patch.dial-digit";
+          action-target: "\"6\"";
+          styles ["pill", "card"]
+          layout { column: 2; row: 1; }
+        }
+
+        Gtk.Button {
+          label: "7";
+          action-name: "patch.dial-digit";
+          action-target: "\"7\"";
+          styles ["pill", "card"]
+          layout { column: 0; row: 2; }
+        }
+        Gtk.Button {
+          label: "8";
+          action-name: "patch.dial-digit";
+          action-target: "\"8\"";
+          styles ["pill", "card"]
+          layout { column: 1; row: 2; }
+        }
+        Gtk.Button {
+          label: "9";
+          action-name: "patch.dial-digit";
+          action-target: "\"9\"";
+          styles ["pill", "card"]
+          layout { column: 2; row: 2; }
+        }
+
+        Gtk.Button {
+          label: "*";
+          action-name: "patch.dial-digit";
+          action-target: "\"*\"";
+          styles ["pill", "card"]
+          layout { column: 0; row: 3; }
+        }
+        Gtk.Button {
+          label: "0";
+          action-name: "patch.dial-digit";
+          action-target: "\"0\"";
+          styles ["pill", "card"]
+          layout { column: 1; row: 3; }
+        }
+        Gtk.Button {
+          label: "#";
+          action-name: "patch.dial-digit";
+          action-target: "\"#\"";
+          styles ["pill", "card"]
+          layout { column: 2; row: 3; }
+        }
+      }
+
+      Gtk.Box {
+        orientation: horizontal;
+        spacing: 8;
+        homogeneous: true;
+
+        Gtk.Button backspace_button {
+          icon-name: "edit-clear-symbolic";
+          tooltip-text: _("Backspace");
+          styles ["pill"]
+        }
+        Gtk.Button call_button {
+          label: _("Call");
+          tooltip-text: _("Place call");
+          styles ["pill", "suggested-action"]
+        }
+        Gtk.Button contacts_button {
+          icon-name: "system-users-symbolic";
+          tooltip-text: _("Contacts");
+          sensitive: false;     // wired up in Phase 2 (libfolks integration)
+          styles ["pill"]
+        }
+      }
+    }
+  };
+}

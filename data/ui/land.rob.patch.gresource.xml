@@ -3,5 +3,9 @@
   <gresource prefix="/land/rob/patch">
     <file preprocess="xml-stripblanks" alias="ui/window.ui">window.ui</file>
     <file preprocess="xml-stripblanks" alias="ui/help-overlay.ui">help-overlay.ui</file>
+    <file preprocess="xml-stripblanks" alias="ui/dialer.ui">dialer.ui</file>
+    <file preprocess="xml-stripblanks" alias="ui/messages.ui">messages.ui</file>
+    <file preprocess="xml-stripblanks" alias="ui/voicemail.ui">voicemail.ui</file>
+    <file preprocess="xml-stripblanks" alias="ui/account-dialog.ui">account-dialog.ui</file>
   </gresource>
 </gresources>

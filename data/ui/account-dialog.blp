@@ -1,0 +1,50 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $PatchAccountDialog: Adw.PreferencesDialog {
+  title: _("JMP Account");
+
+  Adw.PreferencesPage {
+    icon-name: "system-users-symbolic";
+    title: _("Account");
+
+    Adw.PreferencesGroup {
+      title: _("JMP / XMPP credentials");
+      description: _("Your JMP.chat account: the JID looks like\nyournumber@cheogram.com or rob@example.org.\nPasswords are stored in the system keyring.");
+
+      Adw.EntryRow jid_row {
+        title: _("JID");
+        input-purpose: email;
+      }
+
+      Adw.PasswordEntryRow password_row {
+        title: _("Password");
+      }
+    }
+
+    Adw.PreferencesGroup {
+      title: _("Connection");
+      description: _("Override the XMPP server host only if JMP support\nasks you to. Otherwise the JID's domain is used.");
+
+      Adw.EntryRow host_row {
+        title: _("XMPP host (optional)");
+      }
+    }
+
+    Adw.PreferencesGroup {
+      Gtk.Button save_button {
+        label: _("Save and Test Connection");
+        halign: center;
+        action-name: "patch.save-account";
+        styles ["pill", "suggested-action"]
+      }
+
+      Gtk.Label status_label {
+        wrap: true;
+        justify: center;
+        margin-top: 8;
+        styles ["dim-label"]
+      }
+    }
+  }
+}

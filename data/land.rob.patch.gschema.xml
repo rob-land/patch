@@ -13,5 +13,29 @@
       <default>false</default>
       <summary>Whether the window is maximized</summary>
     </key>
+    <key name="account-jid" type="s">
+      <default>""</default>
+      <summary>JMP/XMPP JID for the active account</summary>
+    </key>
+    <key name="xmpp-host" type="s">
+      <default>""</default>
+      <summary>Optional explicit XMPP host override (else derived from JID domain)</summary>
+    </key>
+    <key name="gateway-domain" type="s">
+      <default>"cheogram.com"</default>
+      <summary>JID domain of the PSTN gateway used to encode and decode phone numbers</summary>
+    </key>
+    <key name="default-country" type="s">
+      <default>"US"</default>
+      <summary>ISO country code used by libphonenumber when parsing local-form numbers</summary>
+    </key>
+    <key name="push-distributor" type="s">
+      <default>""</default>
+      <summary>D-Bus name of the currently-bound UnifiedPush distributor (empty = none)</summary>
+    </key>
+    <key name="push-endpoint" type="s">
+      <default>""</default>
+      <summary>Last UnifiedPush endpoint URL registered with the server</summary>
+    </key>
   </schema>
 </schemalist>

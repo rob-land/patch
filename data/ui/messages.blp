@@ -1,0 +1,39 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $PatchMessagesPage: Adw.Bin {
+  child: Gtk.Stack messages_stack {
+    transition-type: crossfade;
+
+    Gtk.StackPage {
+      name: "empty";
+
+      child: Adw.StatusPage {
+        icon-name: "user-available-symbolic";
+        title: _("No messages yet");
+        description: _("SMS conversations will appear here once your JMP\naccount is configured and the first message arrives.");
+
+        child: Gtk.Button {
+          label: _("New Message");
+          halign: center;
+          action-name: "patch.new-message";
+          sensitive: false;     // wired up in Phase 1
+          styles ["pill", "suggested-action"]
+        };
+      };
+    }
+
+    Gtk.StackPage {
+      name: "list";
+
+      child: Gtk.ScrolledWindow {
+        hscrollbar-policy: never;
+
+        child: Gtk.ListBox conversations_list {
+          selection-mode: single;
+          styles ["navigation-sidebar"]
+        };
+      };
+    }
+  };
+}

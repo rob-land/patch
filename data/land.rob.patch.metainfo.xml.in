@@ -4,9 +4,14 @@
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-or-later</project_license>
   <name>Patch</name>
-  <summary>A native GNOME application</summary>
+  <summary>JMP.chat phone client for GNOME mobile</summary>
   <description>
-    <p>TODO: write a real description before shipping.</p>
+    <p>Patch turns a JMP.chat account into a phone on Linux mobile: dialer,
+    SMS, MMS, voicemail. PSTN-first interface with XMPP hidden as the
+    transport.</p>
+    <p>Built around mod_cloud_notify_unifiedpush + KUnifiedPush for
+    self-hosted push notifications. No FCM, no APNs, no external push
+    services.</p>
   </description>
   <launchable type="desktop-id">land.rob.patch.desktop</launchable>
   <developer_name>Rob</developer_name>

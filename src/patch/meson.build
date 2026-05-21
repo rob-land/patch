@@ -19,9 +19,37 @@ python.install_sources(
   files(
     '__init__.py',
     '__main__.py',
+    'account.py',
     'logging_setup.py',
     'main.py',
+    'numfmt.py',
     'window.py',
   ),
   subdir: meson.project_name(),
+)
+
+python.install_sources(
+  files(
+    'pages/__init__.py',
+    'pages/dialer.py',
+    'pages/messages.py',
+    'pages/voicemail.py',
+  ),
+  subdir: meson.project_name() / 'pages',
+)
+
+python.install_sources(
+  files(
+    'dialogs/__init__.py',
+    'dialogs/account_dialog.py',
+  ),
+  subdir: meson.project_name() / 'dialogs',
+)
+
+python.install_sources(
+  files(
+    'store/__init__.py',
+    'store/secrets.py',
+  ),
+  subdir: meson.project_name() / 'store',
 )

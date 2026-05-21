@@ -3,6 +3,10 @@ blueprint_compiler = find_program('blueprint-compiler')
 blueprint_sources = files(
   'window.blp',
   'help-overlay.blp',
+  'dialer.blp',
+  'messages.blp',
+  'voicemail.blp',
+  'account-dialog.blp',
 )
 
 blueprints = custom_target('blueprints',
