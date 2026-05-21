@@ -26,17 +26,25 @@ log = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    remote_jid  TEXT    NOT NULL,
-    incoming    INTEGER NOT NULL,
-    body        TEXT    NOT NULL,
-    sender_jid  TEXT,    -- for group SMS, the actual sender; NULL otherwise
-    timestamp   REAL    NOT NULL,
-    read        INTEGER NOT NULL DEFAULT 0
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    remote_jid      TEXT    NOT NULL,
+    incoming        INTEGER NOT NULL,
+    body            TEXT    NOT NULL,
+    sender_jid      TEXT,    -- for group SMS, the actual sender; NULL otherwise
+    timestamp       REAL    NOT NULL,
+    read            INTEGER NOT NULL DEFAULT 0,
+    attachment_url  TEXT     -- XEP-0066 OOB url, or NULL if text-only
 );
 CREATE INDEX IF NOT EXISTS idx_messages_remote_ts
     ON messages(remote_jid, timestamp);
 """
+
+# Schema-evolution migrations. Each entry is a single ALTER applied iff
+# the column is missing in an existing db. Keep the list append-only.
+_MIGRATIONS = [
+    ("attachment_url",
+     "ALTER TABLE messages ADD COLUMN attachment_url TEXT"),
+]
 
 
 class MessageStore:
@@ -50,7 +58,17 @@ class MessageStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._run_migrations()
         log.info("message store at %s", path)
+
+    def _run_migrations(self) -> None:
+        with self._cursor() as cur:
+            cur.execute("PRAGMA table_info(messages)")
+            existing = {row["name"] for row in cur.fetchall()}
+            for col, ddl in _MIGRATIONS:
+                if col not in existing:
+                    log.info("running migration: add column %s", col)
+                    cur.execute(ddl)
 
     @contextmanager
     def _cursor(self) -> Iterator[sqlite3.Cursor]:
@@ -63,7 +81,8 @@ class MessageStore:
     # -- writes ----------------------------------------------------------
 
     def add_message(self, remote_jid: str, incoming: bool, body: str,
-                    timestamp: float, sender_jid: Optional[str] = None) -> int:
+                    timestamp: float, sender_jid: Optional[str] = None,
+                    attachment_url: Optional[str] = None) -> int:
         # Dedup: MAM catch-up after a brief disconnect can replay a
         # message we already had via the live stream (or the local-echo
         # path for outbound). Same conversation, same body, timestamp
@@ -82,9 +101,11 @@ class MessageStore:
             if row is not None:
                 return row["id"]
             cur.execute(
-                "INSERT INTO messages (remote_jid, incoming, body, sender_jid, timestamp) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (remote_jid, 1 if incoming else 0, body, sender_jid, timestamp),
+                "INSERT INTO messages "
+                "(remote_jid, incoming, body, sender_jid, timestamp, attachment_url) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (remote_jid, 1 if incoming else 0, body, sender_jid,
+                 timestamp, attachment_url),
             )
             return cur.lastrowid
 
@@ -143,7 +164,8 @@ class MessageStore:
         """Return messages for a conversation, oldest first."""
         with self._cursor() as cur:
             cur.execute("""
-                SELECT id, remote_jid, incoming, body, sender_jid, timestamp, read
+                SELECT id, remote_jid, incoming, body, sender_jid, timestamp,
+                       read, attachment_url
                 FROM   messages
                 WHERE  remote_jid=?
                 ORDER  BY timestamp ASC

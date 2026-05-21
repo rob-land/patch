@@ -183,23 +183,26 @@ class PatchMessagesPage(Adw.Bin):
 
     # -- inbound -----------------------------------------------------------
 
-    def _on_message_received(self, _xmpp, remote_jid, body, incoming, timestamp):
+    def _on_message_received(self, _xmpp, remote_jid, body, incoming, timestamp,
+                             attachment_url):
         # Group SMS bodies on JMP carry the sender in the body itself; split
         # that out so we can render it as a separate row label.
         sender_jid = None
         if numfmt.is_group_jid(remote_jid):
             sender_jid, body = numfmt.parse_group_body(body)
         self._store.add_message(
-            remote_jid, bool(incoming), body, timestamp, sender_jid)
+            remote_jid, bool(incoming), body, timestamp, sender_jid,
+            attachment_url=attachment_url or None)
         if self._open_jid == remote_jid:
             # Append directly to the visible thread without a full refetch.
             msg = {
-                "remote_jid": remote_jid,
-                "incoming":   bool(incoming),
-                "body":       body,
-                "sender_jid": sender_jid,
-                "timestamp":  timestamp,
-                "read":       1,
+                "remote_jid":     remote_jid,
+                "incoming":       bool(incoming),
+                "body":           body,
+                "sender_jid":     sender_jid,
+                "timestamp":      timestamp,
+                "read":           1,
+                "attachment_url": attachment_url or None,
             }
             self.thread_list.append(_render_thread_row(msg))
             self._store.mark_read(remote_jid)
@@ -226,29 +229,94 @@ def _truncate(s: str, n: int = 64) -> str:
     return s[:n - 1] + "…"
 
 
+_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif")
+
+
+def _is_image_url(url: str) -> bool:
+    """Cheap heuristic — extension check on the path component.
+
+    Cheogram / JMP attaches MMS images with their original filename, so
+    extension-sniffing is reliable. For non-image attachments we still
+    surface the URL but skip the image preview.
+    """
+    if not url:
+        return False
+    from urllib.parse import urlparse
+    return urlparse(url).path.lower().endswith(_IMAGE_EXTS)
+
+
 def _render_thread_row(msg: dict) -> Gtk.Widget:
     align = Gtk.Align.START if msg["incoming"] else Gtk.Align.END
-    bubble = Gtk.Label(
-        label=msg["body"],
-        wrap=True,
-        wrap_mode=2,  # WORD_CHAR
-        max_width_chars=40,
-        xalign=0 if msg["incoming"] else 1,
-        halign=align,
-        selectable=True,
-    )
-    bubble.add_css_class("card")
-    bubble.add_css_class("body")
-    bubble.set_margin_start(12)
-    bubble.set_margin_end(12)
-    bubble.set_margin_top(4)
-    bubble.set_margin_bottom(4)
+
+    bubble_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    bubble_box.set_halign(align)
+    bubble_box.set_margin_start(12)
+    bubble_box.set_margin_end(12)
+    bubble_box.set_margin_top(4)
+    bubble_box.set_margin_bottom(4)
+    bubble_box.add_css_class("card")
+
+    # If there's an image attachment, render the picture above the body
+    # text. Loading is async via Soup3 — the placeholder shows the URL
+    # until the bytes land.
+    url = msg.get("attachment_url") or ""
+    if url and _is_image_url(url):
+        picture = Gtk.Picture()
+        picture.set_can_shrink(True)
+        picture.set_content_fit(Gtk.ContentFit.CONTAIN)
+        picture.set_size_request(240, 180)
+        bubble_box.append(picture)
+        # Kick off the fetch. Failure leaves the placeholder visible.
+        _load_image_async(picture, url)
+
+    body_text = msg["body"] or ""
+    # Don't duplicate the URL: if body is exactly the OOB URL, suppress it.
+    if url and body_text.strip() == url.strip():
+        body_text = ""
+
+    if body_text:
+        label = Gtk.Label(
+            label=body_text,
+            wrap=True,
+            wrap_mode=2,
+            max_width_chars=40,
+            xalign=0 if msg["incoming"] else 1,
+            selectable=True,
+        )
+        bubble_box.append(label)
 
     row = Gtk.ListBoxRow(selectable=False, activatable=False)
-    row.set_child(bubble)
+    row.set_child(bubble_box)
     row.set_margin_top(2)
     row.set_margin_bottom(2)
     return row
+
+
+# Soup3 async image fetcher. The fetched bytes are decoded into a
+# GdkTexture and set on the Picture. We use a one-shot per-URL session
+# because conversation rendering is the only consumer.
+
+def _load_image_async(picture: Gtk.Picture, url: str) -> None:
+    from gi.repository import GLib, Gio, Soup, Gdk
+    session = Soup.Session()
+    message = Soup.Message.new("GET", url)
+
+    def on_done(_sess, result):
+        try:
+            data = session.send_and_read_finish(result).get_data()
+        except GLib.Error as exc:
+            log.warning("image fetch failed %s: %s", url, exc.message)
+            return
+        if not data:
+            return
+        try:
+            texture = Gdk.Texture.new_from_bytes(GLib.Bytes.new(data))
+        except GLib.Error as exc:
+            log.debug("image decode failed %s: %s", url, exc.message)
+            return
+        picture.set_paintable(texture)
+
+    session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, None, on_done)
 
 
 def _format_ts(timestamp: float) -> str:

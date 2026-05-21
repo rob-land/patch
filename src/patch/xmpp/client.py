@@ -33,6 +33,7 @@ log = logging.getLogger(__name__)
 
 
 JMI_NS = "urn:xmpp:jingle-message:0"
+OOB_NS = "jabber:x:oob"
 
 # Exponential backoff schedule for reconnection. Capped at 5 minutes — past
 # that point we trust the manual "Connect" action or a UnifiedPush wake to
@@ -48,8 +49,10 @@ class XmppClient(GObject.Object):
     __gtype_name__ = "PatchXmppClient"
 
     __gsignals__ = {
-        # remote_jid (bare, str), body (str), incoming (bool), timestamp (float)
-        "message-received": (GObject.SignalFlags.RUN_FIRST, None, (str, str, bool, float)),
+        # remote_jid (bare, str), body (str), incoming (bool), timestamp (float),
+        # attachment_url (str, "" if none)
+        "message-received": (GObject.SignalFlags.RUN_FIRST, None,
+                             (str, str, bool, float, str)),
         # state string — matches account.STATE_*
         "state-changed":    (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         # XEP-0353 Jingle Message Initiation:
@@ -178,7 +181,7 @@ class XmppClient(GObject.Object):
         # Local echo so the conversation list updates immediately. The
         # MAM/carbons round-trip will happen later in flight.
         from time import time as now
-        self.emit("message-received", to_jid, body, False, now())
+        self.emit("message-received", to_jid, body, False, now(), "")
         return True
 
     # -- nbxmpp signal handlers ------------------------------------------
@@ -325,9 +328,20 @@ class XmppClient(GObject.Object):
         # Nodes (not typed Message instances) for stanza-received, so
         # `stanza.getBody()` AttributeErrors on otherwise valid messages.
         body = stanza.getTagData("body")
-        if not body:
+        # XEP-0066 Out-of-Band Data — JMP/cheogram attaches MMS image
+        # URLs as <x xmlns="jabber:x:oob"><url>...</url></x>. The body
+        # typically mirrors the URL but may carry caption text.
+        attachment_url = ""
+        oob = stanza.getTag("x", namespace=OOB_NS)
+        if oob is not None:
+            attachment_url = oob.getTagData("url") or ""
+        if not body and not attachment_url:
             # Receipt, chat state, marker, etc. — nothing to surface.
             return
+        # If we have an attachment but no body, default the body to the
+        # URL so the conversation list preview has something to show.
+        if not body:
+            body = attachment_url
         from_str = stanza.getAttr("from")
         if not from_str:
             return
@@ -353,11 +367,13 @@ class XmppClient(GObject.Object):
                     bare = str(JID.from_string(to_str).bare)
                 except Exception:  # noqa: BLE001
                     pass
-        log.info("%smessage %s %s: %s",
+        log.info("%smessage %s %s: %s%s",
                  "[mam] " if from_mam else "",
                  "<-" if incoming else "->",
-                 bare, body[:80])
-        self.emit("message-received", bare, body, incoming, timestamp)
+                 bare, body[:80],
+                 (" [oob " + attachment_url + "]") if attachment_url else "")
+        self.emit("message-received", bare, body, incoming, timestamp,
+                  attachment_url)
 
     # -- XEP-0353 Jingle Message Initiation ------------------------------
 

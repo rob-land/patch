@@ -58,7 +58,8 @@ class NotificationManager:
 
     # -- handlers --------------------------------------------------------
 
-    def _on_message(self, _xmpp, remote_jid, body, incoming, _timestamp):
+    def _on_message(self, _xmpp, remote_jid, body, incoming, _timestamp,
+                    _attachment_url):
         if not incoming:
             return
         if not body:
