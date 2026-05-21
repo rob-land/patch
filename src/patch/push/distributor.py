@@ -65,6 +65,10 @@ class PushDistributor(GObject.Object):
 
         Uses the cached `push-distributor` GSettings value first; falls
         back to a bus scan for `org.unifiedpush.Distributor.*` names.
+
+        Checks both ListNames (already-running) and ListActivatableNames
+        (autostart-on-demand). KUnifiedPush comes up as a systemd user
+        service and only appears in ListNames once running.
         """
         cached = self._settings.get_string("push-distributor")
         if cached and self._has_owner(cached):
@@ -73,26 +77,33 @@ class PushDistributor(GObject.Object):
         bus = self._bus()
         if bus is None:
             return None
-        try:
-            reply = bus.call_sync(
-                "org.freedesktop.DBus",
-                "/org/freedesktop/DBus",
-                "org.freedesktop.DBus",
-                "ListActivatableNames",
-                None,
-                GLib.VariantType.new("(as)"),
-                Gio.DBusCallFlags.NONE, -1, None)
-        except GLib.Error as exc:
-            log.warning("ListActivatableNames failed: %s", exc.message)
+
+        candidates: set[str] = set()
+        for method in ("ListNames", "ListActivatableNames"):
+            try:
+                reply = bus.call_sync(
+                    "org.freedesktop.DBus",
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    method,
+                    None,
+                    GLib.VariantType.new("(as)"),
+                    Gio.DBusCallFlags.NONE, -1, None)
+            except GLib.Error as exc:
+                log.debug("%s failed: %s", method, exc.message)
+                continue
+            (names,) = reply.unpack()
+            candidates.update(
+                n for n in names if n.startswith(DISTRIBUTOR_NAME_PREFIX))
+
+        if not candidates:
+            log.info("no UnifiedPush distributor found on the session bus")
             return None
-        (names,) = reply.unpack()
-        for name in names:
-            if name.startswith(DISTRIBUTOR_NAME_PREFIX):
-                log.info("found UP distributor %s", name)
-                self._settings.set_string("push-distributor", name)
-                return name
-        log.info("no UnifiedPush distributor found on the session bus")
-        return None
+        # Stable pick — sort so the same distributor is chosen across runs.
+        name = sorted(candidates)[0]
+        log.info("found UP distributor %s", name)
+        self._settings.set_string("push-distributor", name)
+        return name
 
     def _has_owner(self, name: str) -> bool:
         bus = self._bus()
@@ -116,9 +127,14 @@ class PushDistributor(GObject.Object):
     def register(self) -> bool:
         """Call Register on the active distributor.
 
-        Returns True if the call was dispatched (the actual endpoint URL
-        arrives later via Connector1.NewEndpoint). Returns False if no
-        distributor is available or the call errored.
+        Distributor1.Register is a synchronous call: it returns a
+        `(result, reason)` string pair where result is one of
+        "REGISTRATION_SUCCEEDED", "REGISTRATION_FAILED", or
+        "INTERNAL_ERROR". On success the distributor follows up
+        asynchronously with a `NewEndpoint` call on our Connector1 (see
+        connector.py) carrying the actual endpoint URL.
+
+        Returns True iff the distributor accepted the registration.
         """
         name = self.find_distributor()
         if name is None:
@@ -127,7 +143,7 @@ class PushDistributor(GObject.Object):
         if bus is None:
             return False
         try:
-            bus.call_sync(
+            reply = bus.call_sync(
                 name,
                 DISTRIBUTOR_PATH,
                 DISTRIBUTOR_IFACE,
@@ -137,13 +153,17 @@ class PushDistributor(GObject.Object):
                     DEFAULT_TOKEN,
                     "Patch — JMP.chat phone client",
                 )),
-                None,            # any reply
+                GLib.VariantType.new("(ss)"),
                 Gio.DBusCallFlags.NONE, -1, None)
         except GLib.Error as exc:
             log.warning("Register call failed: %s", exc.message)
             return False
-        log.info("Register dispatched to %s", name)
-        return True
+        result, reason = reply.unpack()
+        if result == "REGISTRATION_SUCCEEDED":
+            log.info("Register accepted by %s", name)
+            return True
+        log.warning("Register refused by %s: %s (%s)", name, result, reason)
+        return False
 
     def unregister(self) -> bool:
         name = self._settings.get_string("push-distributor")

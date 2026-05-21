@@ -54,8 +54,13 @@ class PushController(GObject.Object):
         """Publish the Connector1 service and kick off Register."""
         self._connector.publish()
         # Defer the Register call so we don't block do_activate behind
-        # session-bus stalls.
-        GLib.idle_add(self._distributor.register)
+        # session-bus stalls. The lambda explicitly returns False so the
+        # idle source is one-shot — register() returning True (success)
+        # would otherwise re-arm it and we'd Register in a tight loop.
+        def _once():
+            self._distributor.register()
+            return False
+        GLib.idle_add(_once)
 
     # -- inbound from distributor -----------------------------------------
 
@@ -73,6 +78,8 @@ class PushController(GObject.Object):
         plaintext = self._decrypt(body)
         if plaintext is None:
             return
+        log.debug("push plaintext (%d bytes): %s",
+                  len(plaintext), plaintext[:200])
         try:
             payload = json.loads(plaintext)
         except json.JSONDecodeError:
