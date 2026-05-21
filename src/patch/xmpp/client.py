@@ -32,6 +32,8 @@ from patch import account as account_mod
 log = logging.getLogger(__name__)
 
 
+JMI_NS = "urn:xmpp:jingle-message:0"
+
 # Exponential backoff schedule for reconnection. Capped at 5 minutes — past
 # that point we trust the manual "Connect" action or a UnifiedPush wake to
 # bring us back instead of churning the radio.
@@ -50,6 +52,12 @@ class XmppClient(GObject.Object):
         "message-received": (GObject.SignalFlags.RUN_FIRST, None, (str, str, bool, float)),
         # state string — matches account.STATE_*
         "state-changed":    (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        # XEP-0353 Jingle Message Initiation:
+        # action ("propose" | "proceed" | "accept" | "reject" | "retract")
+        # session_id (str)
+        # peer_jid (str, full)        — the JID we're talking to
+        # incoming (bool)             — was this stanza FROM the peer?
+        "jmi-event":        (GObject.SignalFlags.RUN_FIRST, None, (str, str, str, bool)),
     }
 
     def __init__(self, account, store=None):
@@ -294,6 +302,14 @@ class XmppClient(GObject.Object):
             log.debug("MAM unwrap failed (treating as direct): %s", exc)
             mam_data = None
 
+        # XEP-0353 Jingle Message Initiation. The stanza is a <message>
+        # with no body — just a propose/proceed/accept/reject/retract
+        # child tagged with urn:xmpp:jingle-message:0. Surface as a
+        # typed signal so the call UI can drive state without grepping
+        # raw stanzas.
+        if self._handle_jmi(inner):
+            return
+
         if mam_data is not None:
             # MAM result: use the archived timestamp, not "now".
             self._handle_message(inner, timestamp=mam_data.timestamp,
@@ -342,6 +358,57 @@ class XmppClient(GObject.Object):
                  "<-" if incoming else "->",
                  bare, body[:80])
         self.emit("message-received", bare, body, incoming, timestamp)
+
+    # -- XEP-0353 Jingle Message Initiation ------------------------------
+
+    _JMI_ACTIONS = ("propose", "proceed", "accept", "reject", "retract")
+
+    def _handle_jmi(self, stanza) -> bool:
+        """Detect and surface a JMI message. Returns True if handled."""
+        for action in self._JMI_ACTIONS:
+            tag = stanza.getTag(action, namespace=JMI_NS)
+            if tag is None:
+                continue
+            session_id = tag.getAttr("id") or ""
+            from_str = stanza.getAttr("from") or ""
+            try:
+                peer = str(JID.from_string(from_str))
+            except Exception:  # noqa: BLE001
+                peer = from_str
+            own_bare = str(JID.from_string(self._account.jid).bare)
+            incoming = (from_str.split("/", 1)[0] != own_bare)
+            log.info("JMI %s %s id=%s peer=%s",
+                     action, "<-" if incoming else "->", session_id, peer)
+            self.emit("jmi-event", action, session_id, peer, incoming)
+            return True
+        return False
+
+    def send_jmi(self, action: str, session_id: str, peer_jid: str,
+                 media: str = "audio") -> bool:
+        """Send a JMI stanza. `media` only matters for propose."""
+        if action not in self._JMI_ACTIONS:
+            raise ValueError("unknown JMI action: " + action)
+        if not self._client or not self._client.is_stream_authenticated:
+            log.warning("send_jmi: not connected");
+            return False
+        msg = Message(to=peer_jid)
+        elem = msg.addChild(action, namespace=JMI_NS, attrs={"id": session_id})
+        if action == "propose":
+            # XEP-0353 requires at least one <description> child describing
+            # the media we'd negotiate. Audio with the RTP namespace covers
+            # PSTN calls through cheogram/JMP.
+            elem.addChild(
+                "description",
+                namespace="urn:xmpp:jingle:apps:rtp:1",
+                attrs={"media": media},
+            )
+        try:
+            self._client.send_stanza(msg)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("send_jmi failed: %s", exc)
+            return False
+        log.info("JMI %s -> id=%s peer=%s", action, session_id, peer_jid)
+        return True
 
     # -- MAM catch-up ----------------------------------------------------
 

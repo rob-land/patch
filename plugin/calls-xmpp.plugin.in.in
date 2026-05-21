@@ -1,0 +1,8 @@
+[Plugin]
+Module=calls-xmpp
+Name=XMPP / JMP.chat
+Description=Place and receive PSTN calls via JMP.chat (XMPP gateway, XEP-0353 Jingle Message Initiation, XEP-0166/0167/0320/0176 Jingle audio)
+Authors=Rob
+Copyright=Copyright (C) 2026 Rob
+Website=https://codeberg.org/robland/patch
+Version=@VERSION@

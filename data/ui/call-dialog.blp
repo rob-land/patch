@@ -1,0 +1,93 @@
+using Gtk 4.0;
+using Adw 1;
+
+// Active-call screen. Shows the peer's number/contact, the current state
+// of the call, and Accept/Reject (incoming-ringing) or Hangup (active/
+// proposing). Audio is not wired up yet — XEP-0353 JMI signalling only.
+//
+// Note: Adw.Dialog so this surfaces over the main window without
+// disrupting the navigation stack. Once we have a real gnome-calls
+// integration, this view will be replaced by gnome-calls' own active-
+// call shell.
+template $PatchCallDialog: Adw.Dialog {
+  content-width: 380;
+  content-height: 560;
+  can-close: false;
+
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      show-start-title-buttons: false;
+      show-end-title-buttons: false;
+      title-widget: Adw.WindowTitle header_title {
+        title: _("Call");
+      };
+    }
+
+    content: Gtk.Box {
+      orientation: vertical;
+      spacing: 24;
+      margin-top: 32;
+      margin-bottom: 16;
+      margin-start: 24;
+      margin-end: 24;
+
+      Gtk.Image {
+        icon-name: "call-start-symbolic";
+        pixel-size: 96;
+        styles ["dim-label"]
+      }
+
+      Gtk.Label peer_label {
+        wrap: true;
+        justify: center;
+        styles ["title-1"]
+      }
+
+      Gtk.Label state_label {
+        wrap: true;
+        justify: center;
+        styles ["title-3", "dim-label"]
+      }
+
+      Gtk.Box {
+        orientation: vertical;
+        spacing: 4;
+        vexpand: true;
+        valign: end;
+
+        Gtk.Box action_row {
+          orientation: horizontal;
+          spacing: 16;
+          homogeneous: true;
+
+          Gtk.Button accept_button {
+            label: _("Accept");
+            visible: false;
+            styles ["pill", "suggested-action"]
+          }
+
+          Gtk.Button reject_button {
+            label: _("Reject");
+            visible: false;
+            styles ["pill", "destructive-action"]
+          }
+
+          Gtk.Button hangup_button {
+            label: _("Hang Up");
+            visible: false;
+            styles ["pill", "destructive-action"]
+          }
+        }
+
+        Gtk.Label warning_label {
+          margin-top: 8;
+          wrap: true;
+          justify: center;
+          label: _("Audio is not wired up yet — this is XEP-0353 signalling only.");
+          styles ["caption", "dim-label"]
+        }
+      }
+    };
+  };
+}

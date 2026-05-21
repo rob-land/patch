@@ -70,11 +70,12 @@ class PatchDialerPage(Adw.Bin):
         normalized = self._parse_entry()
         if not normalized:
             return
-        log.info("dial: %s (would route via gnome-calls in Phase 3)", normalized)
-        # Phase 3 hook point: this is where the gnome-calls plugin
-        # gets activated with the normalized number. For Phase 0 we
-        # just surface the parsed number as a toast.
-        self.activate_action("win.toast", GLib.Variant("s", f"Would dial {normalized}"))
+        jid = number_to_jid(normalized, self._account.gateway)
+        log.info("dial: %s -> %s", normalized, jid)
+        # win.start-call wires through main.py to CallManager and brings
+        # up the call dialog. Real audio is still TBD — JMI signalling
+        # only for now — but the user gets a working call surface.
+        self.activate_action("win.start-call", GLib.Variant("s", jid))
 
     def _on_message(self, *_):
         normalized = self._parse_entry()

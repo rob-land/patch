@@ -20,6 +20,7 @@ python.install_sources(
     '__init__.py',
     '__main__.py',
     'account.py',
+    'calls.py',
     'logging_setup.py',
     'main.py',
     'notifications.py',
@@ -43,6 +44,7 @@ python.install_sources(
   files(
     'dialogs/__init__.py',
     'dialogs/account_dialog.py',
+    'dialogs/call_dialog.py',
   ),
   subdir: meson.project_name() / 'dialogs',
 )

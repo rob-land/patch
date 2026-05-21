@@ -8,7 +8,9 @@ from gi.repository import Adw, Gio, GLib
 from patch import APP_ID
 from patch import account as account_mod
 from patch.account import Account
+from patch.calls import CallManager
 from patch.dialogs.account_dialog import PatchAccountDialog
+from patch.dialogs.call_dialog import PatchCallDialog
 from patch.logging_setup import configure_logging
 from patch.notifications import NotificationManager
 from patch.push.controller import PushController
@@ -35,7 +37,12 @@ class PatchApplication(Adw.Application):
         self._account       = Account()
         self._store         = MessageStore()
         self._xmpp          = XmppClient(self._account, store=self._store)
+        self._calls         = CallManager(self._account, self._xmpp)
         self._push          = PushController(self._account, self._xmpp)
+        # Auto-present the call dialog when a new session starts. Lives
+        # on the Application (not the window) so cold-start activated
+        # incoming calls have a screen even before the window is built.
+        self._calls.connect("call-started", self._on_call_started)
         # Publish the Connector1 D-Bus object NOW, before Adw.Application
         # registers the `land.rob.patch` bus name in do_startup. dbus-daemon
         # holds queued Message calls until the name is acquired and then
@@ -87,7 +94,8 @@ class PatchApplication(Adw.Application):
             win = PatchWindow(application=self,
                               account=self._account,
                               store=self._store,
-                              xmpp=self._xmpp)
+                              xmpp=self._xmpp,
+                              calls=self._calls)
         win.present()
         if not self._account.is_configured:
             self._show_account_dialog()
@@ -107,6 +115,18 @@ class PatchApplication(Adw.Application):
     def _show_account_dialog(self, *_):
         dialog = PatchAccountDialog(self._account)
         dialog.present(self.props.active_window)
+
+    def _on_call_started(self, _manager, session, _direction):
+        win = self.props.active_window
+        if win is None:
+            # Incoming call on a cold-started instance — bring the window
+            # up so the dialog has a parent to attach to.
+            self.activate()
+            win = self.props.active_window
+        if win is None:
+            return
+        dialog = PatchCallDialog(self._calls, session)
+        dialog.present(win)
 
     def _focused_jid(self):
         win = self.props.active_window

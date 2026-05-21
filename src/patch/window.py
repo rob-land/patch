@@ -25,12 +25,13 @@ class PatchWindow(Adw.ApplicationWindow):
     toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()
     status_banner: Adw.Banner       = Gtk.Template.Child()
 
-    def __init__(self, application, account, store, xmpp, **kwargs):
+    def __init__(self, application, account, store, xmpp, calls, **kwargs):
         super().__init__(application=application, **kwargs)
         self._settings = Gio.Settings.new(APP_ID)
         self._account = account
         self._store = store
         self._xmpp = xmpp
+        self._calls = calls
 
         # Persisted window geometry. get_default_size() returns the
         # configured default, not the live size — get_width/height per
@@ -61,6 +62,12 @@ class PatchWindow(Adw.ApplicationWindow):
             "open-conversation", GLib.VariantType.new("s"))
         open_conv_action.connect("activate", self._on_open_conversation)
         self.add_action(open_conv_action)
+
+        # Dialer fires win.start-call(jid) when the user taps Call.
+        start_call_action = Gio.SimpleAction.new(
+            "start-call", GLib.VariantType.new("s"))
+        start_call_action.connect("activate", self._on_start_call)
+        self.add_action(start_call_action)
 
         # -- pages --------------------------------------------------------
         # Messages page needs the store + xmpp client; the others are
@@ -147,3 +154,12 @@ class PatchWindow(Adw.ApplicationWindow):
         # on the page the user can actually see.
         self.view_stack.set_visible_child_name("messages")
         self._messages_page.open_conversation(jid)
+
+    def _on_start_call(self, _action, param):
+        jid = param.get_string()
+        if self._account.state != account_mod.STATE_CONNECTED:
+            self._on_toast(None, GLib.Variant("s", "Not connected — can't dial"))
+            return
+        sess = self._calls.start_outgoing(jid)
+        if sess is None:
+            self._on_toast(None, GLib.Variant("s", "Already in a call"))
