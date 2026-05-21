@@ -5,6 +5,7 @@ import logging
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from patch import APP_ID
+from patch import account as account_mod
 from patch.pages.dialer    import PatchDialerPage
 from patch.pages.messages  import PatchMessagesPage
 from patch.pages.voicemail import PatchVoicemailPage
@@ -22,6 +23,7 @@ class PatchWindow(Adw.ApplicationWindow):
     title_stack:   Gtk.Stack        = Gtk.Template.Child()
     window_title:  Adw.WindowTitle  = Gtk.Template.Child()
     toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()
+    status_banner: Adw.Banner       = Gtk.Template.Child()
 
     def __init__(self, application, account, store, xmpp, **kwargs):
         super().__init__(application=application, **kwargs)
@@ -52,20 +54,38 @@ class PatchWindow(Adw.ApplicationWindow):
         toast_action.connect("activate", self._on_toast)
         self.add_action(toast_action)
 
+        # Notification "tap" reroutes here so we can switch tabs + open
+        # the right thread on the page. The app fires this action from
+        # NotificationManager._on_open_conversation.
+        open_conv_action = Gio.SimpleAction.new(
+            "open-conversation", GLib.VariantType.new("s"))
+        open_conv_action.connect("activate", self._on_open_conversation)
+        self.add_action(open_conv_action)
+
         # -- pages --------------------------------------------------------
         # Messages page needs the store + xmpp client; the others are
-        # account-only for now.
-        pages = [
-            PatchDialerPage(self._account),
-            PatchMessagesPage(self._account, self._store, self._xmpp),
-            PatchVoicemailPage(self._account),
-        ]
+        # account-only for now. Keep a direct reference to the messages
+        # page so notification-tap navigation can call into it.
+        self._dialer_page    = PatchDialerPage(self._account)
+        self._messages_page  = PatchMessagesPage(self._account, self._store, self._xmpp)
+        self._voicemail_page = PatchVoicemailPage(self._account)
+        pages = [self._dialer_page, self._messages_page, self._voicemail_page]
         for page in pages:
             props = page.get_page_props()
             stack_page = self.view_stack.add_titled_with_icon(
                 page, props["name"], props["title"], props["icon_name"],
             )
             stack_page.set_use_underline(True)
+
+        # -- connection status banner ------------------------------------
+        # Mirror the account state machine into a banner. CONNECTED hides
+        # it; CONNECTING shows a neutral note; FAILED shows the error and
+        # offers a Connect button that retries immediately (bypassing the
+        # backoff timer).
+        self.status_banner.connect("button-clicked", self._on_banner_button)
+        self._account.connect("notify::state",      self._refresh_banner)
+        self._account.connect("notify::last-error", self._refresh_banner)
+        self._refresh_banner()
 
     # -- handlers ---------------------------------------------------------
 
@@ -86,3 +106,44 @@ class PatchWindow(Adw.ApplicationWindow):
     def _on_toast(self, _action, param):
         msg = param.get_string()
         self.toast_overlay.add_toast(Adw.Toast.new(msg))
+
+    def _refresh_banner(self, *_):
+        state = self._account.state
+        if state == account_mod.STATE_CONNECTED or not self._account.is_configured:
+            self.status_banner.set_revealed(False)
+            return
+        if state == account_mod.STATE_CONNECTING:
+            self.status_banner.set_title("Connecting…")
+            self.status_banner.set_button_label("")
+        elif state == account_mod.STATE_FAILED:
+            err = self._account.last_error or "Connection failed"
+            self.status_banner.set_title(err)
+            self.status_banner.set_button_label("Connect")
+        elif state == account_mod.STATE_DISCONNECTED:
+            self.status_banner.set_title("Offline")
+            self.status_banner.set_button_label("Connect")
+        else:
+            self.status_banner.set_title(state.capitalize())
+            self.status_banner.set_button_label("")
+        self.status_banner.set_revealed(True)
+
+    def _on_banner_button(self, _banner):
+        # Bypass the XMPP client's backoff and try again now.
+        self.activate_action("app.connect")
+
+    # -- NotificationManager support -------------------------------------
+
+    def messages_focused_jid(self):
+        """Return the JID currently visible in the thread view, else None.
+
+        NotificationManager calls this through its focus_provider to
+        decide whether to suppress notifications.
+        """
+        return self._messages_page.focused_jid()
+
+    def _on_open_conversation(self, _action, param):
+        jid = param.get_string()
+        # Switch to the messages tab first so the navigation push lands
+        # on the page the user can actually see.
+        self.view_stack.set_visible_child_name("messages")
+        self._messages_page.open_conversation(jid)

@@ -19,16 +19,26 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from gi.repository import GObject
+from gi.repository import GLib, GObject
 
 from nbxmpp.client import Client as NbxClient
-from nbxmpp.const import ConnectionType, StreamError
+from nbxmpp.const import ConnectionType
+from nbxmpp.modules.misc import unwrap_mam
 from nbxmpp.protocol import JID, Message
-from nbxmpp.structs import MessageProperties
 
 from patch import account as account_mod
 
 log = logging.getLogger(__name__)
+
+
+# Exponential backoff schedule for reconnection. Capped at 5 minutes — past
+# that point we trust the manual "Connect" action or a UnifiedPush wake to
+# bring us back instead of churning the radio.
+_BACKOFF_SECONDS = [2, 5, 10, 30, 60, 120, 300]
+
+
+def _backoff_delay(fail_count: int) -> int:
+    return _BACKOFF_SECONDS[min(fail_count - 1, len(_BACKOFF_SECONDS) - 1)]
 
 
 class XmppClient(GObject.Object):
@@ -41,18 +51,32 @@ class XmppClient(GObject.Object):
         "state-changed":    (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
-    def __init__(self, account):
+    def __init__(self, account, store=None):
         super().__init__()
         self._account = account
+        self._store = store        # optional; only used for MAM catch-up
         self._client: Optional[NbxClient] = None
-        # Reconnect counter, reset on successful connect. Used to back off
-        # in `request_reconnect` so we don't hammer the server when wifi
-        # is down.
+        # Reconnect counter, reset on successful connect. Drives the
+        # exponential backoff schedule in `_schedule_reconnect`.
         self._fail_count = 0
+        # GLib timeout source ID for the scheduled reconnect, so we can
+        # cancel it on manual disconnect or a successful connect.
+        self._reconnect_source: int = 0
+        # Whether the user (or push controller) wants us connected. When
+        # False, disconnect requests are honoured and reconnect is not
+        # attempted. Flipped to True the first time connect_to_server is
+        # called and back to False on disconnect_from_server.
+        self._want_connected = False
 
     # -- lifecycle --------------------------------------------------------
 
     def connect_to_server(self) -> None:
+        # Flip the "want connected" flag on every entry so a push wake
+        # that fires before the user dismisses an offline state still
+        # arms reconnect.
+        self._want_connected = True
+        # If a backoff timer is pending, drop it and try immediately.
+        self._cancel_reconnect()
         if not self._account.is_configured:
             log.debug("connect: no account configured, skipping")
             return
@@ -98,7 +122,11 @@ class XmppClient(GObject.Object):
         client.connect()
 
     def disconnect_from_server(self) -> None:
+        self._want_connected = False
+        self._cancel_reconnect()
         if self._client is None:
+            self._account.set_state(account_mod.STATE_DISCONNECTED)
+            self.emit("state-changed", account_mod.STATE_DISCONNECTED)
             return
         log.info("disconnecting")
         try:
@@ -107,6 +135,24 @@ class XmppClient(GObject.Object):
             self._client = None
             self._account.set_state(account_mod.STATE_DISCONNECTED)
             self.emit("state-changed", account_mod.STATE_DISCONNECTED)
+
+    def _cancel_reconnect(self) -> None:
+        if self._reconnect_source:
+            GLib.source_remove(self._reconnect_source)
+            self._reconnect_source = 0
+
+    def _schedule_reconnect(self) -> None:
+        if not self._want_connected:
+            return
+        if self._reconnect_source:
+            return
+        delay = _backoff_delay(self._fail_count)
+        log.info("scheduling reconnect in %ds (fail #%d)", delay, self._fail_count)
+        def _fire():
+            self._reconnect_source = 0
+            self.connect_to_server()
+            return False
+        self._reconnect_source = GLib.timeout_add_seconds(delay, _fire)
 
     # -- send -------------------------------------------------------------
 
@@ -134,25 +180,31 @@ class XmppClient(GObject.Object):
     def _on_login_successful(self, _client, _signal_name):
         log.info("login successful")
         self._fail_count = 0
+        self._cancel_reconnect()
         self._account.set_state(account_mod.STATE_CONNECTED)
         self.emit("state-changed", account_mod.STATE_CONNECTED)
+        # Fetch anything we missed while disconnected.
+        self._request_mam_catchup()
 
     def _on_disconnected(self, _client, _signal_name):
         log.info("disconnected")
+        self._client = None
         self._account.set_state(account_mod.STATE_DISCONNECTED)
         self.emit("state-changed", account_mod.STATE_DISCONNECTED)
-        # In Phase 1 we don't auto-reconnect. Phase 2 (UnifiedPush wake)
-        # is the proper trigger for a reconnect; otherwise the user can
-        # toggle from the menu.
+        # Lost a connection we wanted to keep — back off and retry.
+        if self._want_connected:
+            self._fail_count += 1
+            self._schedule_reconnect()
 
     def _on_connection_failed(self, _client, _signal_name):
         self._fail_count += 1
         err = self._client.get_error() if self._client else None
         msg = str(err) if err else "connection failed"
         log.warning("connection failed (#%d): %s", self._fail_count, msg)
+        self._client = None
         self._account.set_state(account_mod.STATE_FAILED, msg)
         self.emit("state-changed", account_mod.STATE_FAILED)
-        self._client = None
+        self._schedule_reconnect()
 
     def _on_stanza_received(self, _client, _signal_name, stanza):
         # We only handle <message> here. Presence, IQ, etc. flow into
@@ -160,11 +212,30 @@ class XmppClient(GObject.Object):
         # separately if needed.
         if stanza.getName() != "message":
             return
-        self._handle_message(stanza)
+
+        # MAM catch-up results arrive wrapped:
+        #   <message><result xmlns="urn:xmpp:mam:2"><forwarded>
+        #     <message>...the original...</message>
+        #   </forwarded></result></message>
+        # Unwrap so the rest of the pipeline sees a normal <message>.
+        own_jid = JID.from_string(self._account.jid)
+        try:
+            inner, mam_data = unwrap_mam(stanza, own_jid)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("MAM unwrap failed (treating as direct): %s", exc)
+            inner, mam_data = stanza, None
+
+        if mam_data is not None:
+            # MAM result: use the archived timestamp, not "now".
+            self._handle_message(inner, timestamp=mam_data.timestamp,
+                                 from_mam=True)
+        else:
+            self._handle_message(inner)
 
     # -- message ingest ---------------------------------------------------
 
-    def _handle_message(self, stanza: Message) -> None:
+    def _handle_message(self, stanza: Message, timestamp: float | None = None,
+                        from_mam: bool = False) -> None:
         body = stanza.getBody()
         if not body:
             # Receipt, chat state, marker, etc. — nothing to surface.
@@ -172,9 +243,64 @@ class XmppClient(GObject.Object):
         from_jid = stanza.getFrom()
         if from_jid is None:
             return
-        bare = from_jid.bare
-        # Convert the XMPP delay timestamp if present (MAM, offline store).
-        from time import time as now
-        timestamp = now()
-        log.info("message from %s: %s", bare, body[:80])
-        self.emit("message-received", str(bare), body, True, timestamp)
+        bare = str(from_jid.bare)
+        if timestamp is None:
+            from time import time as now
+            timestamp = now()
+        # When the message came from us in MAM (sent via another client,
+        # or our own outbound echo), the "from" is our own JID. Surface
+        # those as outbound so the conversation list renders correctly.
+        own_bare = str(JID.from_string(self._account.jid).bare)
+        incoming = bare != own_bare
+        # For an outbound MAM result, the conversation key is the "to" JID
+        # of the original message, not the "from".
+        if not incoming:
+            to_jid = stanza.getTo()
+            if to_jid is not None:
+                bare = str(to_jid.bare)
+        log.info("%smessage %s %s: %s",
+                 "[mam] " if from_mam else "",
+                 "<-" if incoming else "->",
+                 bare, body[:80])
+        self.emit("message-received", bare, body, incoming, timestamp)
+
+    # -- MAM catch-up ----------------------------------------------------
+
+    def _request_mam_catchup(self) -> None:
+        if self._client is None or self._store is None:
+            return
+        try:
+            mam = self._client.get_module("MAM")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("MAM module unavailable: %s", exc)
+            return
+
+        import datetime as dt
+        latest = self._store.latest_timestamp()
+        if latest > 0:
+            start = dt.datetime.fromtimestamp(latest, tz=dt.timezone.utc)
+        else:
+            # First-ever connect: limit to the last day so we don't drag
+            # in months of unrelated archive.
+            start = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
+        own_jid = JID.from_string(self._account.jid)
+        queryid = "patch-catchup"
+        log.info("MAM catch-up from %s", start.isoformat(timespec="seconds"))
+        try:
+            mam.make_query(
+                jid=own_jid.bare,
+                queryid=queryid,
+                start=start,
+                max_=200,
+                callback=self._on_mam_query_done,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("MAM query failed to dispatch: %s", exc)
+
+    def _on_mam_query_done(self, task):
+        try:
+            result = task.finish()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("MAM catch-up failed: %s", exc)
+            return
+        log.info("MAM catch-up done: complete=%s", getattr(result, "complete", "?"))

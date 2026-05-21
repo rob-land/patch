@@ -171,6 +171,11 @@ template $PatchDialerPage: Adw.Bin {
           tooltip-text: _("Backspace");
           styles ["pill"]
         }
+        Gtk.Button message_button {
+          icon-name: "mail-send-symbolic";
+          tooltip-text: _("Send message");
+          styles ["pill"]
+        }
         Gtk.Button call_button {
           label: _("Call");
           tooltip-text: _("Place call");
@@ -179,7 +184,7 @@ template $PatchDialerPage: Adw.Bin {
         Gtk.Button contacts_button {
           icon-name: "system-users-symbolic";
           tooltip-text: _("Contacts");
-          sensitive: false;     // wired up in Phase 2 (libfolks integration)
+          sensitive: false;     // wired up in a later phase (libfolks)
           styles ["pill"]
         }
       }

@@ -22,6 +22,7 @@ python.install_sources(
     'account.py',
     'logging_setup.py',
     'main.py',
+    'notifications.py',
     'numfmt.py',
     'window.py',
   ),

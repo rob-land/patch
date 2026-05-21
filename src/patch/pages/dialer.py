@@ -7,7 +7,7 @@ from typing import Optional
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
-from patch.numfmt import normalize_e164
+from patch.numfmt import normalize_e164, number_to_jid
 
 log = logging.getLogger(__name__)
 
@@ -16,11 +16,12 @@ log = logging.getLogger(__name__)
 class PatchDialerPage(Adw.Bin):
     __gtype_name__ = "PatchDialerPage"
 
-    recent_stack:   Gtk.Stack    = Gtk.Template.Child()
-    recent_list:    Gtk.ListBox  = Gtk.Template.Child()
-    number_entry:   Gtk.Entry    = Gtk.Template.Child()
-    backspace_button: Gtk.Button = Gtk.Template.Child()
-    call_button:    Gtk.Button   = Gtk.Template.Child()
+    recent_stack:    Gtk.Stack    = Gtk.Template.Child()
+    recent_list:     Gtk.ListBox  = Gtk.Template.Child()
+    number_entry:    Gtk.Entry    = Gtk.Template.Child()
+    backspace_button: Gtk.Button  = Gtk.Template.Child()
+    message_button:  Gtk.Button   = Gtk.Template.Child()
+    call_button:     Gtk.Button   = Gtk.Template.Child()
 
     def __init__(self, account):
         super().__init__()
@@ -37,6 +38,7 @@ class PatchDialerPage(Adw.Bin):
 
         self.backspace_button.connect("clicked", self._on_backspace)
         self.call_button.connect("clicked", self._on_call)
+        self.message_button.connect("clicked", self._on_message)
 
         # No recent-calls store yet; show the empty page. Wired up in a
         # later phase when call history lands.
@@ -55,20 +57,35 @@ class PatchDialerPage(Adw.Bin):
         if length > 0:
             buffer.delete_text(length - 1, 1)
 
-    def _on_call(self, *_):
+    def _parse_entry(self) -> str | None:
         text = self.number_entry.get_text().strip()
-        # Use the account's gateway country if set; default GSettings is "US".
-        country = "US"
-        normalized = normalize_e164(text, default_country=country)
+        normalized = normalize_e164(text, default_country="US")
         if not normalized:
             log.info("dial: could not parse %r as a phone number", text)
             self.activate_action("win.toast", GLib.Variant("s", "Invalid number"))
+            return None
+        return normalized
+
+    def _on_call(self, *_):
+        normalized = self._parse_entry()
+        if not normalized:
             return
         log.info("dial: %s (would route via gnome-calls in Phase 3)", normalized)
         # Phase 3 hook point: this is where the gnome-calls plugin
         # gets activated with the normalized number. For Phase 0 we
         # just surface the parsed number as a toast.
         self.activate_action("win.toast", GLib.Variant("s", f"Would dial {normalized}"))
+
+    def _on_message(self, *_):
+        normalized = self._parse_entry()
+        if not normalized:
+            return
+        jid = number_to_jid(normalized, self._account.gateway)
+        log.info("message: opening conversation for %s -> %s", normalized, jid)
+        # Window-scoped action: switches to the Messages tab and pushes
+        # the thread page for this JID (creating the conversation if
+        # it's new — see PatchMessagesPage.open_conversation).
+        self.activate_action("win.open-conversation", GLib.Variant("s", jid))
 
     # -- view-stack accessor used by the window's tab wiring --------------
 

@@ -48,6 +48,11 @@ class PatchMessagesPage(Adw.Bin):
         self._store = store
         self._xmpp = xmpp
         self._open_jid: str | None = None
+        # Track whether the thread view is currently visible (not just
+        # the conversation that was last navigated to). NotificationManager
+        # reads `focused_jid()` to decide whether to fire a desktop
+        # notification or stay quiet.
+        self.nav.connect("notify::visible-page", self._on_nav_changed)
 
         self.conversations_list.connect("row-activated", self._on_row_activated)
         self.compose_entry.connect("activate", self._on_compose_activate)
@@ -72,6 +77,33 @@ class PatchMessagesPage(Adw.Bin):
             "title":      "Messages",
             "icon_name":  "user-available-symbolic",
         }
+
+    def focused_jid(self) -> str | None:
+        """Return the JID of the currently-visible thread, else None.
+
+        Used by NotificationManager to suppress notifications for the
+        conversation the user is staring at.
+        """
+        visible = self.nav.get_visible_page()
+        if visible is None or visible.get_tag() != "thread":
+            return None
+        return self._open_jid
+
+    def open_conversation(self, remote_jid: str) -> None:
+        """Public entry point used by the dialer + notification activation.
+
+        Idempotent: opening an empty conversation just pushes the thread
+        page with an empty thread list — the user's first outbound send
+        populates the store and the conversation appears in the list on
+        the next refresh.
+        """
+        self._open_thread(remote_jid)
+
+    def _on_nav_changed(self, *_):
+        # Whenever the visible page changes (e.g. user backs out of the
+        # thread), let the dimmed status push back down through the
+        # focused_jid() helper — no state to mutate here, just a hook.
+        pass
 
     # -- conversation list -----------------------------------------------
 

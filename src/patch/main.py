@@ -10,6 +10,7 @@ from patch import account as account_mod
 from patch.account import Account
 from patch.dialogs.account_dialog import PatchAccountDialog
 from patch.logging_setup import configure_logging
+from patch.notifications import NotificationManager
 from patch.push.controller import PushController
 from patch.store.db import MessageStore
 from patch.window import PatchWindow
@@ -31,10 +32,18 @@ class PatchApplication(Adw.Application):
 
         # Construct the long-lived services. These outlive the window so
         # restarts/reactivations don't tear down the XMPP stream.
-        self._account = Account()
-        self._store   = MessageStore()
-        self._xmpp    = XmppClient(self._account)
-        self._push    = PushController(self._account, self._xmpp)
+        self._account       = Account()
+        self._store         = MessageStore()
+        self._xmpp          = XmppClient(self._account, store=self._store)
+        self._push          = PushController(self._account, self._xmpp)
+        # NotificationManager talks to the window+messages page through
+        # callable hooks because they aren't constructed yet (lifecycle
+        # is application -> startup -> activate -> window).
+        self._notifications = NotificationManager(
+            self, self._account, self._xmpp,
+            window_provider=lambda: self.props.active_window,
+            focus_provider=self._focused_jid,
+        )
 
         for name, handler in (
             ("about",       self._show_about),
@@ -90,6 +99,14 @@ class PatchApplication(Adw.Application):
     def _show_account_dialog(self, *_):
         dialog = PatchAccountDialog(self._account)
         dialog.present(self.props.active_window)
+
+    def _focused_jid(self):
+        win = self.props.active_window
+        if win is None:
+            return None
+        # The window exposes a helper that proxies to the messages page.
+        getter = getattr(win, "messages_focused_jid", None)
+        return getter() if getter else None
 
     def _show_about(self, *_):
         from patch import APP_NAME, VERSION

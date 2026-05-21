@@ -64,7 +64,23 @@ class MessageStore:
 
     def add_message(self, remote_jid: str, incoming: bool, body: str,
                     timestamp: float, sender_jid: Optional[str] = None) -> int:
+        # Dedup: MAM catch-up after a brief disconnect can replay a
+        # message we already had via the live stream (or the local-echo
+        # path for outbound). Same conversation, same body, timestamp
+        # within 5 seconds == duplicate. Return the existing id so
+        # callers see the same shape either way.
         with self._cursor() as cur:
+            cur.execute("""
+                SELECT id FROM messages
+                WHERE remote_jid=?
+                  AND body=?
+                  AND incoming=?
+                  AND ABS(timestamp - ?) < 5
+                LIMIT 1
+            """, (remote_jid, body, 1 if incoming else 0, timestamp))
+            row = cur.fetchone()
+            if row is not None:
+                return row["id"]
             cur.execute(
                 "INSERT INTO messages (remote_jid, incoming, body, sender_jid, timestamp) "
                 "VALUES (?, ?, ?, ?, ?)",
@@ -78,6 +94,17 @@ class MessageStore:
                 "UPDATE messages SET read=1 WHERE remote_jid=? AND read=0",
                 (remote_jid,),
             )
+
+    def latest_timestamp(self) -> float:
+        """Return the most-recent message timestamp, or 0 if the store is empty.
+
+        Used as the lower bound for MAM catch-up queries — fetch only
+        messages that arrived after our last-known-good moment.
+        """
+        with self._cursor() as cur:
+            cur.execute("SELECT MAX(timestamp) FROM messages")
+            (ts,) = cur.fetchone()
+            return ts or 0.0
 
     # -- reads -----------------------------------------------------------
 

@@ -78,5 +78,26 @@ with tempfile.TemporaryDirectory() as tmp:
     eq("group thread sender_jid",
        thread[0]["sender_jid"], "+15553333@cheogram.com")
 
+    # Dedup: a MAM catch-up re-delivers the same message within the
+    # 5-second window. Same (remote_jid, body, incoming, timestamp±5)
+    # collapses to one row. Use a distinct body so we don't accidentally
+    # collide with the conversation's existing rows.
+    pre_count = len(store.thread("+15552222@cheogram.com"))
+    new_id = store.add_message("+15552222@cheogram.com", incoming=True,
+                               body="dedup-test-body", timestamp=400.0)
+    dup_id = store.add_message("+15552222@cheogram.com", incoming=True,
+                               body="dedup-test-body", timestamp=402.5)
+    eq("dedup returns existing id",  dup_id, new_id)
+    eq("dedup keeps same row count",
+       len(store.thread("+15552222@cheogram.com")), pre_count + 1)
+    # Different body within the window IS a new row.
+    store.add_message("+15552222@cheogram.com", incoming=True,
+                      body="different-body", timestamp=402.5)
+    eq("different body inserts",
+       len(store.thread("+15552222@cheogram.com")), pre_count + 2)
+
+    # latest_timestamp() returns max(timestamp) across all rows
+    eq("latest_timestamp", store.latest_timestamp(), 402.5)
+
 print()
 print("PASS  test_db")

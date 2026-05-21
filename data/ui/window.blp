@@ -53,6 +53,14 @@ template $PatchWindow: Adw.ApplicationWindow {
         }
       }
 
+      [top]
+      Adw.Banner status_banner {
+        revealed: false;
+        // The button only makes sense when we're stuck — in that case the
+        // controller toggles button-label between empty and "Connect".
+        button-label: "";
+      }
+
       content: Adw.ToastOverlay toast_overlay {
         child: Adw.ViewStack view_stack {
           vexpand: true;
