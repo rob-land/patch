@@ -105,13 +105,17 @@ class PushController(GObject.Object):
 
     def _on_xmpp_state(self, _xmpp, state):
         if state == account_mod.STATE_CONNECTED:
-            self._maybe_send_enable_iq()
+            # Pass state directly — account.state lives behind a GLib
+            # idle-add deferral and may still hold the previous value
+            # when this signal fires synchronously.
+            self._maybe_send_enable_iq(state_hint=state)
 
-    def _maybe_send_enable_iq(self) -> None:
+    def _maybe_send_enable_iq(self, state_hint: str | None = None) -> None:
         endpoint = self._settings.get_string("push-endpoint")
         if not endpoint:
             return
-        if self._account.state != account_mod.STATE_CONNECTED:
+        state = state_hint or self._account.state
+        if state != account_mod.STATE_CONNECTED:
             return
         if not self._account.is_configured:
             return
