@@ -168,11 +168,17 @@ class XmppClient(GObject.Object):
 
     # -- send -------------------------------------------------------------
 
-    def send_chat_message(self, to_jid: str, body: str) -> bool:
+    def send_chat_message(self, to_jid: str, body: str,
+                          attachment_url: str = "") -> bool:
         if not self._client or not self._client.is_stream_authenticated:
             log.warning("send: not connected")
             return False
         msg = Message(to=to_jid, typ="chat", body=body)
+        if attachment_url:
+            # XEP-0066 Out-of-Band Data — JMP/cheogram looks for the
+            # url here to ship MMS images out to PSTN.
+            oob = msg.addChild("x", namespace=OOB_NS)
+            oob.addChild("url").addData(attachment_url)
         try:
             self._client.send_stanza(msg)
         except Exception as exc:
@@ -181,8 +187,50 @@ class XmppClient(GObject.Object):
         # Local echo so the conversation list updates immediately. The
         # MAM/carbons round-trip will happen later in flight.
         from time import time as now
-        self.emit("message-received", to_jid, body, False, now(), "")
+        self.emit("message-received", to_jid, body, False, now(),
+                  attachment_url)
         return True
+
+    # -- XEP-0363 HTTP Upload --------------------------------------------
+
+    def request_upload_slot(self, upload_jid: str, filename: str,
+                             size: int, content_type: str, callback) -> None:
+        """Async wrapper around nbxmpp's HTTPUpload.request_slot.
+
+        callback signature: (put_url, get_url, put_headers, error).
+        On success error is None; on failure put/get are "" and error is a
+        string. The headers dict carries auth/cookie headers the slot
+        requires for the PUT request.
+        """
+        if not self._client or not self._client.is_stream_authenticated:
+            callback("", "", {}, "not connected")
+            return
+        try:
+            mod = self._client.get_module("HTTPUpload")
+        except Exception as exc:  # noqa: BLE001
+            callback("", "", {}, "no HTTPUpload module: " + str(exc))
+            return
+
+        def _on_done(task):
+            try:
+                slot = task.finish()
+            except Exception as exc:  # noqa: BLE001
+                callback("", "", {}, str(exc))
+                return
+            put_url = getattr(slot, "put_uri", None) or getattr(slot, "put", "")
+            get_url = getattr(slot, "get_uri", None) or getattr(slot, "get", "")
+            headers = getattr(slot, "headers", {}) or {}
+            callback(put_url, get_url, headers, None)
+
+        try:
+            mod.request_slot(
+                jid=JID.from_string(upload_jid),
+                filename=filename, size=size,
+                content_type=content_type,
+                callback=_on_done,
+            )
+        except Exception as exc:  # noqa: BLE001
+            callback("", "", {}, str(exc))
 
     # -- nbxmpp signal handlers ------------------------------------------
 

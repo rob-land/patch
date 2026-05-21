@@ -41,6 +41,7 @@ class PatchMessagesPage(Adw.Bin):
     thread_list:       Gtk.ListBox        = Gtk.Template.Child()
     compose_entry:     Gtk.Entry          = Gtk.Template.Child()
     send_button:       Gtk.Button         = Gtk.Template.Child()
+    attach_button:     Gtk.Button         = Gtk.Template.Child()
 
     def __init__(self, account, store, xmpp):
         super().__init__()
@@ -57,6 +58,7 @@ class PatchMessagesPage(Adw.Bin):
         self.conversations_list.connect("row-activated", self._on_row_activated)
         self.compose_entry.connect("activate", self._on_compose_activate)
         self.send_button.connect("clicked", self._on_compose_activate)
+        self.attach_button.connect("clicked", self._on_attach_clicked)
 
         actions = Gio.SimpleActionGroup()
         send_action = Gio.SimpleAction.new("send-message", None)
@@ -180,6 +182,129 @@ class PatchMessagesPage(Adw.Bin):
                 "win.toast", GLib.Variant("s", "Send failed"))
             return
         self.compose_entry.set_text("")
+
+    # -- outbound attach -------------------------------------------------
+
+    def _on_attach_clicked(self, *_):
+        if not self._open_jid:
+            return
+        if self._account.state != account_mod.STATE_CONNECTED:
+            self.activate_action(
+                "win.toast",
+                GLib.Variant("s", "Not connected — can't upload"))
+            return
+        dialog = Gtk.FileDialog()
+        dialog.set_title("Send image")
+        # Only show images by default — JMP only sends MMS for image/
+        # mime types; other file types route as plain XMPP file shares
+        # which the recipient PSTN side can't render.
+        filter_img = Gtk.FileFilter()
+        filter_img.set_name("Images")
+        filter_img.add_mime_type("image/jpeg")
+        filter_img.add_mime_type("image/png")
+        filter_img.add_mime_type("image/gif")
+        filter_img.add_mime_type("image/webp")
+        filters = __import__("gi").repository.Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(filter_img)
+        dialog.set_filters(filters)
+        dialog.set_default_filter(filter_img)
+        parent = self.get_root() if isinstance(self.get_root(), Gtk.Window) else None
+        dialog.open(parent, None, self._on_file_chosen)
+
+    def _on_file_chosen(self, dialog, result):
+        try:
+            gfile = dialog.open_finish(result)
+        except Exception:  # noqa: BLE001
+            return       # user cancelled or error
+        if gfile is None:
+            return
+        path = gfile.get_path()
+        if not path:
+            return
+        import mimetypes
+        import os
+        size = os.path.getsize(path)
+        filename = os.path.basename(path)
+        ctype, _ = mimetypes.guess_type(path)
+        ctype = ctype or "application/octet-stream"
+        upload_jid = self._upload_service_jid()
+        if not upload_jid:
+            self.activate_action(
+                "win.toast",
+                GLib.Variant("s", "No upload service known for this server"))
+            return
+        log.info("requesting upload slot for %s (%d bytes, %s) via %s",
+                 filename, size, ctype, upload_jid)
+
+        # Capture into closure: we need the path again at PUT time.
+        def on_slot(put_url, get_url, headers, error):
+            if error or not put_url:
+                log.warning("upload slot failed: %s", error)
+                self.activate_action(
+                    "win.toast",
+                    GLib.Variant("s", "Upload slot request failed"))
+                return
+            log.info("got slot: PUT %s -> GET %s", put_url, get_url)
+            self._put_file_to_slot(path, ctype, put_url, get_url, headers)
+
+        self._xmpp.request_upload_slot(
+            upload_jid, filename, size, ctype, on_slot)
+
+    def _upload_service_jid(self) -> str:
+        """Heuristic for the JID of the XEP-0363 HTTP upload component.
+
+        We assume the standard 'upload.<server>' convention used by
+        most prosody deployments (including chat.rob.land). Disco-based
+        discovery is a later improvement once we have a generalised
+        server-info module.
+        """
+        jid = self._account.jid
+        if "@" not in jid:
+            return ""
+        return "upload." + jid.partition("@")[2]
+
+    def _put_file_to_slot(self, path, ctype, put_url, get_url, headers):
+        from gi.repository import GLib, Gio, Soup
+        log.info("PUT %s -> %s", path, put_url)
+        # Load the file. We could stream it for large attachments, but
+        # JMP MMS caps are sub-megabyte — read all is fine.
+        try:
+            with open(path, "rb") as f:
+                data = f.read()
+        except OSError as exc:
+            log.warning("upload read failed: %s", exc)
+            return
+
+        session = Soup.Session()
+        message = Soup.Message.new("PUT", put_url)
+        message.get_request_headers().append("Content-Type", ctype)
+        for k, v in (headers or {}).items():
+            message.get_request_headers().append(k, v)
+        message.set_request_body_from_bytes(ctype, GLib.Bytes.new(data))
+
+        def on_put(_sess, result):
+            try:
+                _ = session.send_and_read_finish(result)
+            except GLib.Error as exc:
+                log.warning("PUT failed: %s", exc.message)
+                self.activate_action(
+                    "win.toast",
+                    GLib.Variant("s", "Image upload failed"))
+                return
+            code = message.get_status()
+            if code < 200 or code >= 300:
+                log.warning("PUT got HTTP %d", code)
+                self.activate_action(
+                    "win.toast",
+                    GLib.Variant("s",
+                                 f"Image upload failed (HTTP {code})"))
+                return
+            log.info("PUT ok, sending chat with OOB url")
+            self._xmpp.send_chat_message(
+                self._open_jid, get_url, attachment_url=get_url)
+
+        session.send_and_read_async(
+            message, GLib.PRIORITY_DEFAULT, None, on_put)
 
     # -- inbound -----------------------------------------------------------
 

@@ -70,6 +70,11 @@ template $PatchMessagesPage: Adw.Bin {
             margin-top: 8;
             margin-bottom: 8;
 
+            Gtk.Button attach_button {
+              icon-name: "mail-attachment-symbolic";
+              tooltip-text: _("Attach image");
+              styles ["pill"]
+            }
             Gtk.Entry compose_entry {
               hexpand: true;
               placeholder-text: _("Message");
