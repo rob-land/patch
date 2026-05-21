@@ -24,7 +24,8 @@ from gi.repository import GLib, GObject
 from nbxmpp.client import Client as NbxClient
 from nbxmpp.const import ConnectionType
 from nbxmpp.modules.misc import unwrap_mam
-from nbxmpp.protocol import JID, Message
+from nbxmpp.namespaces import Namespace
+from nbxmpp.protocol import JID, Iq, Message
 
 from patch import account as account_mod
 
@@ -192,6 +193,16 @@ class XmppClient(GObject.Object):
             self._client.send_stanza(Presence())
         except Exception as exc:  # noqa: BLE001
             log.debug("initial presence failed: %s", exc)
+        # Enable XEP-0280 Message Carbons so messages we send (or that
+        # are sent on our behalf) from other clients on this account
+        # show up here too. nbxmpp doesn't ship a Carbons module — we
+        # ship the enable IQ inline.
+        try:
+            enable_iq = Iq(typ="set")
+            enable_iq.addChild("enable", namespace=Namespace.CARBONS)
+            self._client.send_stanza(enable_iq)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("carbons enable failed: %s", exc)
         self._account.set_state(account_mod.STATE_CONNECTED)
         self.emit("state-changed", account_mod.STATE_CONNECTED)
         # MAM catch-up off by default for now — nbxmpp 7.2 chokes on
@@ -235,17 +246,53 @@ class XmppClient(GObject.Object):
         if stanza.getName() != "message":
             return
 
+        own_jid = JID.from_string(self._account.jid)
+
+        # XEP-0280 Message Carbons wrap a message sent or received
+        # through another client on our account:
+        #   <message from="us@server"><sent|received xmlns="urn:xmpp:carbons:2">
+        #     <forwarded xmlns="urn:xmpp:forward:0">
+        #       <message>...the original...</message>
+        #     </forwarded>
+        #   </sent|received></message>
+        # We do the unwrap ourselves rather than calling
+        # nbxmpp.modules.misc.unwrap_carbon because that helper uses
+        # Message.getFrom() which a raw simplexml Node doesn't have.
+        inner = stanza
+        for tag_name in ("received", "sent"):
+            carbon = stanza.getTag(tag_name, namespace=Namespace.CARBONS)
+            if carbon is None:
+                continue
+            # The outer "from" must be our own bare JID; servers shouldn't
+            # accept anything else but verify defensively.
+            outer_from = stanza.getAttr("from") or ""
+            outer_bare = outer_from.split("/", 1)[0]
+            if outer_bare != str(own_jid.bare):
+                log.debug("rejecting carbon from %s (not us)", outer_from)
+                return
+            forwarded = carbon.getTag("forwarded", namespace=Namespace.FORWARD)
+            if forwarded is None:
+                break
+            inner_msg = forwarded.getTag("message")
+            if inner_msg is None:
+                break
+            inner = inner_msg
+            # `received` carbons of our OWN sent messages are a duplicate
+            # of the `sent` carbon we already handled — drop them.
+            if (tag_name == "received"
+                and (inner.getAttr("from") or "").split("/", 1)[0] == str(own_jid.bare)):
+                return
+            break
+
         # MAM catch-up results arrive wrapped:
         #   <message><result xmlns="urn:xmpp:mam:2"><forwarded>
         #     <message>...the original...</message>
         #   </forwarded></result></message>
-        # Unwrap so the rest of the pipeline sees a normal <message>.
-        own_jid = JID.from_string(self._account.jid)
         try:
-            inner, mam_data = unwrap_mam(stanza, own_jid)
+            inner, mam_data = unwrap_mam(inner, own_jid)
         except Exception as exc:  # noqa: BLE001
             log.debug("MAM unwrap failed (treating as direct): %s", exc)
-            inner, mam_data = stanza, None
+            mam_data = None
 
         if mam_data is not None:
             # MAM result: use the archived timestamp, not "now".

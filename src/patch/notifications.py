@@ -98,7 +98,7 @@ class NotificationManager:
             notif.set_icon(Gio.ThemedIcon.new("user-available-symbolic"))
         except Exception:  # noqa: BLE001
             pass
-        notif.set_default_action_and_target_value(
+        notif.set_default_action_and_target(
             "app.open-conversation", GLib.Variant("s", remote_jid))
         # Stable notification id per conversation so newer messages from
         # the same sender replace, not stack, the notification.
