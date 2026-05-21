@@ -6,9 +6,14 @@
   "command": "patch",
   "finish-args": [
     "--share=ipc",
+    "--share=network",
     "--socket=fallback-x11",
     "--socket=wayland",
-    "--device=dri"
+    "--device=dri",
+    "--talk-name=org.freedesktop.Notifications",
+    "--talk-name=org.freedesktop.secrets",
+    "--talk-name=org.unifiedpush.Distributor.*",
+    "--own-name=land.rob.patch"
   ],
   "cleanup": [
     "/include",

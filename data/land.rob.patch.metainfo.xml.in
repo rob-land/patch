@@ -14,6 +14,19 @@
     services.</p>
   </description>
   <launchable type="desktop-id">land.rob.patch.desktop</launchable>
+  <categories>
+    <category>Network</category>
+    <category>Telephony</category>
+    <category>InstantMessaging</category>
+  </categories>
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <recommends>
+    <control>keyboard</control>
+    <control>pointing</control>
+    <control>touch</control>
+  </recommends>
   <developer_name>Rob</developer_name>
   <url type="homepage">https://codeberg.org/robland/patch</url>
   <url type="bugtracker">https://codeberg.org/robland/patch/issues</url>

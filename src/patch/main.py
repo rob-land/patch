@@ -56,6 +56,14 @@ class PatchApplication(Adw.Application):
         # also fires after a manual app.disconnect → reconnect flow.
         self._account.connect("notify::state", self._on_account_state)
 
+    def do_startup(self):
+        Adw.Application.do_startup(self)
+        # Push needs to come up here, not in do_activate — under
+        # --gapplication-service (D-Bus activation by dbus-daemon when a
+        # push arrives at a sleeping app) do_activate is never called.
+        # do_startup runs in both that path and the normal UI launch.
+        self._push.start()
+
     def do_activate(self):
         win = self.props.active_window
         if win is None:
@@ -63,16 +71,10 @@ class PatchApplication(Adw.Application):
                               account=self._account,
                               store=self._store,
                               xmpp=self._xmpp)
-            # Kick off push only after the window exists — Connector1
-            # publish + Register calls need the session bus + GLib loop
-            # both running, which happens by the time present() returns.
-            self._push.start()
         win.present()
         if not self._account.is_configured:
             self._show_account_dialog()
         else:
-            # Kick off the connection on first activation. State changes
-            # propagate via the notify::state handler.
             self._xmpp.connect_to_server()
 
     def _on_account_state(self, account, _pspec):
