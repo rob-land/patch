@@ -2,36 +2,85 @@ using Gtk 4.0;
 using Adw 1;
 
 template $PatchMessagesPage: Adw.Bin {
-  child: Gtk.Stack messages_stack {
-    transition-type: crossfade;
+  child: Adw.NavigationView nav {
+    Adw.NavigationPage list_page {
+      title: _("Messages");
+      tag: "list";
 
-    Gtk.StackPage {
-      name: "empty";
+      child: Adw.ToolbarView {
+        content: Gtk.Stack messages_stack {
+          transition-type: crossfade;
 
-      child: Adw.StatusPage {
-        icon-name: "user-available-symbolic";
-        title: _("No messages yet");
-        description: _("SMS conversations will appear here once your JMP\naccount is configured and the first message arrives.");
+          Gtk.StackPage {
+            name: "empty";
 
-        child: Gtk.Button {
-          label: _("New Message");
-          halign: center;
-          action-name: "patch.new-message";
-          sensitive: false;     // wired up in Phase 1
-          styles ["pill", "suggested-action"]
+            child: Adw.StatusPage {
+              icon-name: "user-available-symbolic";
+              title: _("No messages yet");
+              description: _("SMS conversations will appear here once your JMP\naccount is configured and the first message arrives.");
+            };
+          }
+
+          Gtk.StackPage {
+            name: "list";
+
+            child: Gtk.ScrolledWindow {
+              hscrollbar-policy: never;
+
+              child: Gtk.ListBox conversations_list {
+                selection-mode: single;
+                styles ["navigation-sidebar"]
+              };
+            };
+          }
         };
       };
     }
 
-    Gtk.StackPage {
-      name: "list";
+    Adw.NavigationPage thread_page {
+      title: _("Conversation");
+      tag: "thread";
 
-      child: Gtk.ScrolledWindow {
-        hscrollbar-policy: never;
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar thread_header {
+          show-start-title-buttons: false;
+          title-widget: Adw.WindowTitle thread_title {};
+        }
 
-        child: Gtk.ListBox conversations_list {
-          selection-mode: single;
-          styles ["navigation-sidebar"]
+        content: Gtk.Box {
+          orientation: vertical;
+          spacing: 0;
+
+          Gtk.ScrolledWindow {
+            vexpand: true;
+            hscrollbar-policy: never;
+
+            child: Gtk.ListBox thread_list {
+              selection-mode: none;
+              styles ["background"]
+            };
+          }
+
+          Gtk.Box {
+            orientation: horizontal;
+            spacing: 8;
+            margin-start: 8;
+            margin-end: 8;
+            margin-top: 8;
+            margin-bottom: 8;
+
+            Gtk.Entry compose_entry {
+              hexpand: true;
+              placeholder-text: _("Message");
+            }
+            Gtk.Button send_button {
+              icon-name: "go-up-symbolic";
+              tooltip-text: _("Send");
+              action-name: "patch.send-message";
+              styles ["pill", "suggested-action"]
+            }
+          }
         };
       };
     }

@@ -1,1 +1,8 @@
-# Add Python runtime deps here, one per line.
+# XMPP client library — used for messaging and (later) Jingle Message
+# Initiation signalling. Native GLib mainloop integration so the connection
+# can be driven from the same event loop as the GTK UI without a worker
+# thread.
+nbxmpp>=4.5
+# Used for: structured logging timestamps / colors when running outside
+# the Flatpak sandbox. Optional but pulled in by nbxmpp anyway.
+precis-i18n

@@ -49,7 +49,16 @@ python.install_sources(
 python.install_sources(
   files(
     'store/__init__.py',
+    'store/db.py',
     'store/secrets.py',
   ),
   subdir: meson.project_name() / 'store',
+)
+
+python.install_sources(
+  files(
+    'xmpp/__init__.py',
+    'xmpp/client.py',
+  ),
+  subdir: meson.project_name() / 'xmpp',
 )

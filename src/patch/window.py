@@ -23,10 +23,12 @@ class PatchWindow(Adw.ApplicationWindow):
     window_title:  Adw.WindowTitle  = Gtk.Template.Child()
     toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()
 
-    def __init__(self, application, account, **kwargs):
+    def __init__(self, application, account, store, xmpp, **kwargs):
         super().__init__(application=application, **kwargs)
         self._settings = Gio.Settings.new(APP_ID)
         self._account = account
+        self._store = store
+        self._xmpp = xmpp
 
         # Persisted window geometry. get_default_size() returns the
         # configured default, not the live size — get_width/height per
@@ -51,13 +53,18 @@ class PatchWindow(Adw.ApplicationWindow):
         self.add_action(toast_action)
 
         # -- pages --------------------------------------------------------
-        for page_cls in (PatchDialerPage, PatchMessagesPage, PatchVoicemailPage):
-            page = page_cls(self._account)
+        # Messages page needs the store + xmpp client; the others are
+        # account-only for now.
+        pages = [
+            PatchDialerPage(self._account),
+            PatchMessagesPage(self._account, self._store, self._xmpp),
+            PatchVoicemailPage(self._account),
+        ]
+        for page in pages:
             props = page.get_page_props()
             stack_page = self.view_stack.add_titled_with_icon(
                 page, props["name"], props["title"], props["icon_name"],
             )
-            # Defer to ViewStack default semantics for visibility / badges.
             stack_page.set_use_underline(True)
 
     # -- handlers ---------------------------------------------------------
