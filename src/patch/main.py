@@ -36,6 +36,14 @@ class PatchApplication(Adw.Application):
         self._store         = MessageStore()
         self._xmpp          = XmppClient(self._account, store=self._store)
         self._push          = PushController(self._account, self._xmpp)
+        # Publish the Connector1 D-Bus object NOW, before Adw.Application
+        # registers the `land.rob.patch` bus name in do_startup. dbus-daemon
+        # holds queued Message calls until the name is acquired and then
+        # dispatches them — if Connector1 isn't registered on the bus
+        # connection at that exact moment, the queued cold-start push call
+        # errors with "no such interface" and the push is lost. Publishing
+        # the object eagerly closes that race.
+        self._push.publish_connector()
         # NotificationManager talks to the window+messages page through
         # callable hooks because they aren't constructed yet (lifecycle
         # is application -> startup -> activate -> window).
@@ -67,11 +75,11 @@ class PatchApplication(Adw.Application):
 
     def do_startup(self):
         Adw.Application.do_startup(self)
-        # Push needs to come up here, not in do_activate — under
-        # --gapplication-service (D-Bus activation by dbus-daemon when a
-        # push arrives at a sleeping app) do_activate is never called.
-        # do_startup runs in both that path and the normal UI launch.
-        self._push.start()
+        # Connector1 already lives on the bus (see __init__). Now that the
+        # bus name is owned, kick off the registration with the configured
+        # distributor. Safe in both the foreground launch path and the
+        # --gapplication-service cold-start activated by dbus-daemon.
+        self._push.start_registration()
 
     def do_activate(self):
         win = self.props.active_window

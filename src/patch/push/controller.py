@@ -50,13 +50,25 @@ class PushController(GObject.Object):
         # disconnects (XEP-0357 is stateful at the server end).
         self._xmpp.connect("state-changed", self._on_xmpp_state)
 
-    def start(self) -> None:
-        """Publish the Connector1 service and kick off Register."""
+    def publish_connector(self) -> None:
+        """Publish the Connector1 D-Bus object.
+
+        Called from Application.__init__ before Adw.Application acquires
+        the `land.rob.patch` bus name, so any KUP-queued Message call
+        finds Connector1 already at /org/unifiedpush/Connector when
+        dbus-daemon dispatches it.
+        """
         self._connector.publish()
-        # Defer the Register call so we don't block do_activate behind
-        # session-bus stalls. The lambda explicitly returns False so the
-        # idle source is one-shot — register() returning True (success)
-        # would otherwise re-arm it and we'd Register in a tight loop.
+
+    def start_registration(self) -> None:
+        """Discover the distributor and kick off Register.
+
+        Safe to call after the bus name is owned (do_startup). Idle-
+        scheduled so we don't block startup behind a session-bus stall.
+        The lambda returns False so the idle source is one-shot —
+        register() returning True (success) would otherwise re-arm it
+        and we'd Register in a tight loop.
+        """
         def _once():
             self._distributor.register()
             return False
