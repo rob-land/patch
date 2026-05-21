@@ -175,16 +175,38 @@ class XmppClient(GObject.Object):
     # -- nbxmpp signal handlers ------------------------------------------
 
     def _on_connected(self, _client, _signal_name):
-        log.info("transport connected")
-
-    def _on_login_successful(self, _client, _signal_name):
-        log.info("login successful")
+        # nbxmpp fires this once the stream goes ACTIVE — auth done, bind
+        # done, ready to send and receive. (`login-successful` only fires
+        # in nbxmpp's `login-test` mode where the client disconnects
+        # immediately after auth, so we can't hook our session-up
+        # behaviour there.)
+        log.info("logged in (stream active)")
         self._fail_count = 0
         self._cancel_reconnect()
+        # Send a bare presence so the server knows we're available and
+        # starts delivering carbons / push for us. Without this some
+        # servers hold messages in offline-store rather than forwarding
+        # to the live stream.
+        try:
+            from nbxmpp.protocol import Presence
+            self._client.send_stanza(Presence())
+        except Exception as exc:  # noqa: BLE001
+            log.debug("initial presence failed: %s", exc)
         self._account.set_state(account_mod.STATE_CONNECTED)
         self.emit("state-changed", account_mod.STATE_CONNECTED)
-        # Fetch anything we missed while disconnected.
-        self._request_mam_catchup()
+        # MAM catch-up off by default for now — nbxmpp 7.2 chokes on
+        # large concatenated batches with an ExpatError that tears the
+        # whole stream down. Live stanzas come through stanza-received
+        # without MAM. Toggle PATCH_MAM_CATCHUP=1 in the env to opt in.
+        import os
+        if os.environ.get("PATCH_MAM_CATCHUP") == "1":
+            self._request_mam_catchup()
+
+    def _on_login_successful(self, _client, _signal_name):
+        # Only fires in login-test mode (see _on_connected). Kept as a
+        # no-op so the subscribe call doesn't throw if the upstream
+        # behaviour ever changes.
+        log.debug("login-successful (login-test mode only)")
 
     def _on_disconnected(self, _client, _signal_name):
         log.info("disconnected")
@@ -234,20 +256,27 @@ class XmppClient(GObject.Object):
 
     # -- message ingest ---------------------------------------------------
 
-    def _handle_message(self, stanza: Message, timestamp: float | None = None,
+    def _handle_message(self, stanza, timestamp: float | None = None,
                         from_mam: bool = False) -> None:
-        body = stanza.getBody()
+        # Use Node-safe accessors. The dispatcher hands us raw simplexml
+        # Nodes (not typed Message instances) for stanza-received, so
+        # `stanza.getBody()` AttributeErrors on otherwise valid messages.
+        body = stanza.getTagData("body")
         if not body:
             # Receipt, chat state, marker, etc. — nothing to surface.
             return
-        from_jid = stanza.getFrom()
-        if from_jid is None:
+        from_str = stanza.getAttr("from")
+        if not from_str:
+            return
+        try:
+            from_jid = JID.from_string(from_str)
+        except Exception:  # noqa: BLE001
             return
         bare = str(from_jid.bare)
         if timestamp is None:
             from time import time as now
             timestamp = now()
-        # When the message came from us in MAM (sent via another client,
+        # When the message came from us in MAM (sent via another client
         # or our own outbound echo), the "from" is our own JID. Surface
         # those as outbound so the conversation list renders correctly.
         own_bare = str(JID.from_string(self._account.jid).bare)
@@ -255,9 +284,12 @@ class XmppClient(GObject.Object):
         # For an outbound MAM result, the conversation key is the "to" JID
         # of the original message, not the "from".
         if not incoming:
-            to_jid = stanza.getTo()
-            if to_jid is not None:
-                bare = str(to_jid.bare)
+            to_str = stanza.getAttr("to")
+            if to_str:
+                try:
+                    bare = str(JID.from_string(to_str).bare)
+                except Exception:  # noqa: BLE001
+                    pass
         log.info("%smessage %s %s: %s",
                  "[mam] " if from_mam else "",
                  "<-" if incoming else "->",
@@ -286,12 +318,17 @@ class XmppClient(GObject.Object):
         own_jid = JID.from_string(self._account.jid)
         queryid = "patch-catchup"
         log.info("MAM catch-up from %s", start.isoformat(timespec="seconds"))
+        # nbxmpp 7.2 has a known issue parsing large concatenated MAM
+        # batches in one TCP read; the SimpleXML parser misinterprets
+        # the byte stream as "stream finished" mid-blob and tears the
+        # connection down. Keep `max_` small so each batch fits in one
+        # TCP segment. TODO: paginate via RSM cursor for full history.
         try:
             mam.make_query(
                 jid=own_jid.bare,
                 queryid=queryid,
                 start=start,
-                max_=200,
+                max_=20,
                 callback=self._on_mam_query_done,
             )
         except Exception as exc:  # noqa: BLE001

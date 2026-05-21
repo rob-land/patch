@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from gi.repository import Adw, Gio, GLib, Gtk
-
-from patch import account as account_mod
+from gi.repository import Adw, Gio, Gtk
 
 log = logging.getLogger(__name__)
 
@@ -64,10 +62,13 @@ class PatchAccountDialog(Adw.PreferencesDialog):
                 _msg="Could not store credentials in the system keyring."
             )
             return
-        self._account.set_state(account_mod.STATE_DISCONNECTED)
-        self._set_status(_msg="Saved. Connection will be attempted in Phase 1.")
-        # In Phase 1+ we'll kick off a connection here and toggle the
-        # status text to "connecting…" / "connected" / the error.
+        # Kick off the connection. The window's status banner mirrors
+        # the account state machine so the user sees connecting → online
+        # (or the error) without us having to babysit a status_label
+        # update here.
+        if app := Gio.Application.get_default():
+            app.activate_action("connect", None)
+        self._set_status(_msg="Saved. Connecting…")
 
     def _set_status(self, _msg: str) -> None:
         self.status_label.set_text(_msg)
