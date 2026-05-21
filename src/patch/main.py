@@ -10,6 +10,7 @@ from patch import account as account_mod
 from patch.account import Account
 from patch.dialogs.account_dialog import PatchAccountDialog
 from patch.logging_setup import configure_logging
+from patch.push.controller import PushController
 from patch.store.db import MessageStore
 from patch.window import PatchWindow
 from patch.xmpp.client import XmppClient
@@ -33,6 +34,7 @@ class PatchApplication(Adw.Application):
         self._account = Account()
         self._store   = MessageStore()
         self._xmpp    = XmppClient(self._account)
+        self._push    = PushController(self._account, self._xmpp)
 
         for name, handler in (
             ("about",       self._show_about),
@@ -61,6 +63,10 @@ class PatchApplication(Adw.Application):
                               account=self._account,
                               store=self._store,
                               xmpp=self._xmpp)
+            # Kick off push only after the window exists — Connector1
+            # publish + Register calls need the session bus + GLib loop
+            # both running, which happens by the time present() returns.
+            self._push.start()
         win.present()
         if not self._account.is_configured:
             self._show_account_dialog()

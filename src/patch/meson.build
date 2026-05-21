@@ -62,3 +62,16 @@ python.install_sources(
   ),
   subdir: meson.project_name() / 'xmpp',
 )
+
+python.install_sources(
+  files(
+    'push/__init__.py',
+    'push/connector.py',
+    'push/controller.py',
+    'push/decrypt.py',
+    'push/distributor.py',
+    'push/enable_iq.py',
+    'push/keys.py',
+  ),
+  subdir: meson.project_name() / 'push',
+)

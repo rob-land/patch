@@ -34,6 +34,16 @@ install_data(
   install_dir: datadir / 'glib-2.0' / 'schemas',
 )
 
+# D-Bus activation service file: lets dbus-daemon spin Patch up when a
+# UnifiedPush distributor wants to deliver a push and we aren't running.
+configure_file(
+  input:        'land.rob.patch.service.in',
+  output:       'land.rob.patch.service',
+  configuration: conf,
+  install:      true,
+  install_dir:  datadir / 'dbus-1' / 'services',
+)
+
 install_data(
   'icons/hicolor/scalable/apps/land.rob.patch.svg',
   install_dir: datadir / 'icons' / 'hicolor' / 'scalable' / 'apps',

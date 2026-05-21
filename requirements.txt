@@ -6,3 +6,6 @@ nbxmpp>=4.5
 # Used for: structured logging timestamps / colors when running outside
 # the Flatpak sandbox. Optional but pulled in by nbxmpp anyway.
 precis-i18n
+# RFC 8291 Web Push decryption + P-256 keypair generation for the
+# UnifiedPush receiver. Same library the server's test harness uses.
+cryptography>=42

@@ -25,6 +25,7 @@ conf.set('APP_ID',     application_id)
 conf.set('VERSION',    meson.project_version())
 conf.set('PKGDATADIR', pkgdatadir)
 conf.set('LOCALEDIR',  localedir)
+conf.set('BINDIR',     bindir)
 
 # Quoted-string substitutions for Python .in files.
 py_conf = configuration_data()
