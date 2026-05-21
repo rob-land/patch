@@ -24,6 +24,8 @@ from __future__ import annotations
 import logging
 import uuid
 
+import time
+
 from gi.repository import GObject
 
 from patch import numfmt
@@ -79,12 +81,16 @@ class CallManager(GObject.Object):
         "call-ended":     (GObject.SignalFlags.RUN_FIRST, None, (object,)),
     }
 
-    def __init__(self, account, xmpp, contacts=None):
+    def __init__(self, account, xmpp, contacts=None, store=None):
         super().__init__()
         self._account = account
         self._xmpp = xmpp
         self._contacts = contacts
+        self._store = store
         self._session: CallSession | None = None
+        # Time the current session began, so the log entry gets the
+        # original timestamp on terminal transition.
+        self._session_started_at: float = 0.0
 
         self._xmpp.connect("jmi-event", self._on_jmi)
 
@@ -100,6 +106,7 @@ class CallManager(GObject.Object):
             session_id=session_id, peer_jid=peer_jid, peer_label=peer_label,
             incoming=False, initial_state=STATE_PROPOSING)
         self._session = sess
+        self._session_started_at = time.time()
         # Fire the signal before sending the stanza so the UI has a chance
         # to show 'connecting…' while the propose is in flight.
         self.emit("call-started", sess, "outgoing")
@@ -167,6 +174,7 @@ class CallManager(GObject.Object):
                 peer_label=peer_label, incoming=True,
                 initial_state=STATE_RINGING)
             self._session = sess
+            self._session_started_at = time.time()
             self.emit("call-started", sess, "incoming")
             return
 
@@ -191,11 +199,26 @@ class CallManager(GObject.Object):
         sess.state = new_state
         self.emit("call-changed", sess)
         if sess.is_terminal:
+            self._log_call(sess)
             self.emit("call-ended", sess)
             # Keep `_session` around briefly so the UI can read terminal
             # state, then clear when a fresh call starts.
             if self._session is sess:
                 self._session = sess if not sess.is_terminal else None
+
+    def _log_call(self, sess: CallSession) -> None:
+        if self._store is None:
+            return
+        try:
+            self._store.add_call(
+                peer_jid=sess.peer_jid,
+                peer_label=sess.peer_label or sess.peer_jid,
+                direction="incoming" if sess.incoming else "outgoing",
+                state=sess.state,
+                started_at=self._session_started_at or time.time(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not log call: %s", exc)
 
     def _label_for(self, jid: str) -> str:
         number = numfmt.jid_to_number(jid, self._account.gateway)

@@ -40,7 +40,8 @@ class PatchApplication(Adw.Application):
         self._xmpp          = XmppClient(self._account, store=self._store)
         self._contacts      = ContactsManager(self._account)
         self._calls         = CallManager(self._account, self._xmpp,
-                                          contacts=self._contacts)
+                                          contacts=self._contacts,
+                                          store=self._store)
         self._push          = PushController(self._account, self._xmpp)
         # Auto-present the call dialog when a new session starts. Lives
         # on the Application (not the window) so cold-start activated

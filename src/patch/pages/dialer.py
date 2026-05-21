@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 from typing import Optional
 
@@ -10,6 +11,14 @@ from gi.repository import Adw, Gio, GLib, Gtk
 from patch.numfmt import normalize_e164, number_to_jid
 
 log = logging.getLogger(__name__)
+
+
+_STATE_ICONS = {
+    "ended":     "call-stop-symbolic",
+    "active":    "call-start-symbolic",
+    "rejected":  "call-missed-symbolic",
+    "retracted": "call-missed-symbolic",
+}
 
 
 @Gtk.Template(resource_path="/land/rob/patch/ui/dialer.ui")
@@ -23,9 +32,11 @@ class PatchDialerPage(Adw.Bin):
     message_button:  Gtk.Button   = Gtk.Template.Child()
     call_button:     Gtk.Button   = Gtk.Template.Child()
 
-    def __init__(self, account):
+    def __init__(self, account, store=None, calls=None):
         super().__init__()
         self._account = account
+        self._store = store
+        self._calls = calls
 
         # Local action group "patch" — the per-digit dial buttons fire
         # `patch.dial-digit("3")` from the .blp. Variant payload is a
@@ -39,10 +50,15 @@ class PatchDialerPage(Adw.Bin):
         self.backspace_button.connect("clicked", self._on_backspace)
         self.call_button.connect("clicked", self._on_call)
         self.message_button.connect("clicked", self._on_message)
+        self.recent_list.connect("row-activated", self._on_recent_activated)
 
-        # No recent-calls store yet; show the empty page. Wired up in a
-        # later phase when call history lands.
-        self.recent_stack.set_visible_child_name("empty")
+        if self._calls is not None:
+            # Refresh the recents whenever a call terminates (the manager
+            # logs the call entry at terminal transition).
+            self._calls.connect("call-ended",
+                                lambda *_: self._refresh_recent())
+
+        self._refresh_recent()
 
     # -- input handlers ----------------------------------------------------
 
@@ -88,7 +104,35 @@ class PatchDialerPage(Adw.Bin):
         # it's new — see PatchMessagesPage.open_conversation).
         self.activate_action("win.open-conversation", GLib.Variant("s", jid))
 
-    # -- view-stack accessor used by the window's tab wiring --------------
+    # -- recent calls ----------------------------------------------------
+
+    def _refresh_recent(self) -> None:
+        if self._store is None:
+            self.recent_stack.set_visible_child_name("empty")
+            return
+        calls = self._store.recent_calls(limit=30)
+        # Clear existing rows.
+        while True:
+            row = self.recent_list.get_first_child()
+            if row is None:
+                break
+            self.recent_list.remove(row)
+        if not calls:
+            self.recent_stack.set_visible_child_name("empty")
+            return
+        for c in calls:
+            self.recent_list.append(_make_call_row(c))
+        self.recent_stack.set_visible_child_name("list")
+
+    def _on_recent_activated(self, _list, row):
+        peer_jid = row.get_name()
+        if not peer_jid:
+            return
+        # Tap to redial. Same path the dialer Call button uses.
+        self.activate_action(
+            "win.start-call", GLib.Variant("s", peer_jid))
+
+    # -- view-stack accessor used by the window's tab wiring -----------
 
     def get_page_props(self) -> dict:
         """Return the kwargs the window uses when adding us to the ViewStack."""
@@ -97,3 +141,25 @@ class PatchDialerPage(Adw.Bin):
             "title":      "Dialer",
             "icon_name":  "call-start-symbolic",
         }
+
+
+def _make_call_row(call: dict) -> Adw.ActionRow:
+    when = dt.datetime.fromtimestamp(call["started_at"])
+    today = dt.date.today()
+    if when.date() == today:
+        ts_label = when.strftime("%H:%M")
+    elif (today - when.date()).days < 7:
+        ts_label = when.strftime("%a %H:%M")
+    else:
+        ts_label = when.strftime("%b %-d")
+    direction_icon = "go-up-symbolic" if call["direction"] == "outgoing" else "go-down-symbolic"
+    state_icon = _STATE_ICONS.get(call["state"], "call-stop-symbolic")
+    subtitle = f"{call['direction'].capitalize()} · {call['state']} · {ts_label}"
+    row = Adw.ActionRow(
+        title=call.get("peer_label") or call["peer_jid"],
+        subtitle=subtitle,
+    )
+    row.set_name(call["peer_jid"])
+    row.add_prefix(Gtk.Image.new_from_icon_name(direction_icon))
+    row.add_suffix(Gtk.Image.new_from_icon_name(state_icon))
+    return row

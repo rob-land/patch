@@ -37,6 +37,17 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 CREATE INDEX IF NOT EXISTS idx_messages_remote_ts
     ON messages(remote_jid, timestamp);
+
+CREATE TABLE IF NOT EXISTS calls_log (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    peer_jid        TEXT    NOT NULL,
+    peer_label      TEXT    NOT NULL,
+    direction       TEXT    NOT NULL,   -- 'incoming' | 'outgoing'
+    state           TEXT    NOT NULL,   -- terminal CallSession.state
+    started_at      REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_calls_log_started_at
+    ON calls_log(started_at DESC);
 """
 
 # Schema-evolution migrations. Each entry is a single ALTER applied iff
@@ -115,6 +126,31 @@ class MessageStore:
                 "UPDATE messages SET read=1 WHERE remote_jid=? AND read=0",
                 (remote_jid,),
             )
+
+    # -- call log --------------------------------------------------------
+
+    def add_call(self, peer_jid: str, peer_label: str, direction: str,
+                 state: str, started_at: float) -> int:
+        with self._cursor() as cur:
+            cur.execute(
+                "INSERT INTO calls_log "
+                "(peer_jid, peer_label, direction, state, started_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (peer_jid, peer_label, direction, state, started_at),
+            )
+            return cur.lastrowid
+
+    def recent_calls(self, limit: int = 50) -> list[dict]:
+        with self._cursor() as cur:
+            cur.execute("""
+                SELECT id, peer_jid, peer_label, direction, state, started_at
+                FROM   calls_log
+                ORDER  BY started_at DESC
+                LIMIT  ?
+            """, (limit,))
+            return [dict(r) for r in cur.fetchall()]
+
+    # -- misc ------------------------------------------------------------
 
     def latest_timestamp(self) -> float:
         """Return the most-recent message timestamp, or 0 if the store is empty.
