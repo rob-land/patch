@@ -32,7 +32,19 @@ def fetch_turn_uri(xmpp_client, server_jid: str, callback) -> None:
         callback(None)
         return
 
-    def _on_response(response):
+    # nbxmpp dispatches iq-response callbacks as
+    #   func(client, response_stanza, **user_data)
+    # — earlier this module used a one-arg signature which raised
+    # TypeError inside nbxmpp's dispatcher (caught + swallowed by
+    # its except-Exception clause), so the callback never reached
+    # _on_turn_resolved and the audio engine never started. The
+    # visible symptom in the log was 'transport-info: 0 added, N
+    # pending' followed by peer-terminated 10s later.
+    def _on_response(_client, response, **_kw):
+        if response is None:
+            log.warning("turn disco timed out")
+            callback(None)
+            return
         try:
             uri = _extract_first_turn(response)
         except Exception as exc:  # noqa: BLE001
