@@ -75,5 +75,22 @@ eq("format: NANP 11-digit",
 eq("format: 10-digit",
    numfmt.format_for_display("7135551234"), "7135551234")
 
+# Progressive typing format
+eq("typed: empty",  numfmt.format_as_typed(""), "")
+eq("typed: 1 dig",  numfmt.format_as_typed("7"), "7")
+eq("typed: 3 dig",  numfmt.format_as_typed("713"), "713")
+eq("typed: 4 dig",  numfmt.format_as_typed("7135"), "(713) 5")
+eq("typed: 6 dig",  numfmt.format_as_typed("713555"), "(713) 555")
+eq("typed: 7 dig",  numfmt.format_as_typed("7135551"), "(713) 555-1")
+eq("typed: 10 dig", numfmt.format_as_typed("7135551234"), "(713) 555-1234")
+eq("typed: 11 with leading 1",
+   numfmt.format_as_typed("17135551234"), "+1 (713) 555-1234")
+eq("typed: international +44",
+   numfmt.format_as_typed("+442079460958"), "+442079460958")
+eq("typed: +1 prefix",
+   numfmt.format_as_typed("+17135551234"), "+1 7135551234")
+eq("typed: DTMF tail preserved",
+   numfmt.format_as_typed("7135551234*1"), "(713) 555-1234*1")
+
 print()
 print("PASS  test_numfmt")

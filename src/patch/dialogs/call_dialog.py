@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import time
 
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, GLib, Gtk
 
 from patch import calls
 
@@ -26,6 +27,10 @@ class PatchCallDialog(Adw.Dialog):
         super().__init__()
         self._manager = manager
         self._session = session
+        # Set when the session first enters ACTIVE — the timer tick reads
+        # this to compute MM:SS.
+        self._active_since: float | None = None
+        self._timer_source: int = 0
 
         self.peer_label.set_text(session.peer_label or session.peer_jid)
         self._refresh_state()
@@ -44,7 +49,7 @@ class PatchCallDialog(Adw.Dialog):
     _STATE_COPY = {
         calls.STATE_RINGING:    ("Incoming call",   "Ringing…"),
         calls.STATE_PROPOSING:  ("Calling",         "Waiting for proceed…"),
-        calls.STATE_ACTIVE:     ("In call",         "Audio not wired up yet"),
+        calls.STATE_ACTIVE:     ("In call",         "00:00"),
         calls.STATE_REJECTED:   ("Call rejected",   "Closed."),
         calls.STATE_RETRACTED:  ("Call cancelled",  "Closed."),
         calls.STATE_ENDED:      ("Call ended",      "Closed."),
@@ -65,6 +70,29 @@ class PatchCallDialog(Adw.Dialog):
         # The header has no close button — let the user dismiss only
         # after the session is terminal.
         self.set_can_close(sess.is_terminal)
+
+        # Manage the call-duration ticker. Start once on entry to
+        # ACTIVE, stop on any other state.
+        if active and self._active_since is None:
+            self._active_since = time.time()
+            self._timer_source = GLib.timeout_add_seconds(1, self._tick)
+            self._tick()  # populate 00:00 immediately
+        elif not active and self._timer_source:
+            GLib.source_remove(self._timer_source)
+            self._timer_source = 0
+
+    def _tick(self) -> bool:
+        if self._active_since is None:
+            return False
+        elapsed = int(time.time() - self._active_since)
+        m, s = divmod(elapsed, 60)
+        h, m = divmod(m, 60)
+        if h:
+            label = f"{h:d}:{m:02d}:{s:02d}"
+        else:
+            label = f"{m:02d}:{s:02d}"
+        self.state_label.set_text(label)
+        return True  # keep firing
 
     def _on_call_event(self, _manager, session):
         if session is not self._session:

@@ -122,3 +122,60 @@ def format_for_display(number_e164: str) -> str:
         return f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
     # Fall through unchanged.
     return number_e164
+
+
+def format_as_typed(raw: str) -> str:
+    """Progressively format a number as the user types it.
+
+    Mirrors the iOS / Android dialer behaviour: '7' stays '7',
+    '713' becomes '713', '7135' becomes '713-5', '7135551234' becomes
+    '(713) 555-1234'. Non-digit characters (`*`, `#`, leading `+`)
+    are preserved so DTMF-style input still works.
+
+    Pure NANP heuristic for now — international users with leading `+`
+    get raw digits back (no localized grouping). Matches what Cheogram-
+    Android does.
+    """
+    if not raw:
+        return ""
+    # Preserve leading '+' (E.164) and any trailing DTMF-style chars
+    # the user might have typed (* or #). We only re-group the digit
+    # prefix.
+    plus = ""
+    if raw.startswith("+"):
+        plus = "+"
+        rest = raw[1:]
+    else:
+        rest = raw
+    # Split into a leading digit run and the tail (anything that isn't
+    # a digit, e.g. '*' '#' user-typed mid-string). We only format the
+    # leading run; the tail stays verbatim.
+    i = 0
+    while i < len(rest) and rest[i].isdigit():
+        i += 1
+    digits = rest[:i]
+    tail = rest[i:]
+
+    if plus == "+":
+        # International — leave digits alone aside from a single space
+        # after the country-code prefix where we recognise it.
+        if digits.startswith("1") and len(digits) > 1:
+            head = "1 "
+            digits = digits[1:]
+        else:
+            head = ""
+        return "+" + head + digits + tail
+
+    # NANP grouping
+    if len(digits) <= 3:
+        body = digits
+    elif len(digits) <= 6:
+        body = f"({digits[:3]}) {digits[3:]}" if len(digits) > 3 else digits
+    elif len(digits) <= 10:
+        body = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    elif len(digits) == 11 and digits.startswith("1"):
+        # User typed a leading 1 — render as +1 (xxx) xxx-xxxx
+        body = f"+1 ({digits[1:4]}) {digits[4:7]}-{digits[7:]}"
+    else:
+        body = digits
+    return body + tail

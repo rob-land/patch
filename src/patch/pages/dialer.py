@@ -8,7 +8,7 @@ from typing import Optional
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
-from patch.numfmt import normalize_e164, number_to_jid
+from patch.numfmt import format_as_typed, normalize_e164, number_to_jid
 
 log = logging.getLogger(__name__)
 
@@ -51,6 +51,12 @@ class PatchDialerPage(Adw.Bin):
         self.call_button.connect("clicked", self._on_call)
         self.message_button.connect("clicked", self._on_message)
         self.recent_list.connect("row-activated", self._on_recent_activated)
+        # Reformat the number as it changes — same UX as the iOS/
+        # Android system dialer. Underlying value (digits + DTMF chars)
+        # is preserved; we only adjust the visible grouping.
+        self._suppress_reformat = False
+        self._raw_number = ""
+        self.number_entry.connect("notify::text", self._on_entry_changed)
 
         if self._calls is not None:
             # Refresh the recents whenever a call terminates (the manager
@@ -64,20 +70,47 @@ class PatchDialerPage(Adw.Bin):
 
     def _on_dial_digit(self, _action, param):
         digit = param.get_string()
-        buffer = self.number_entry.get_buffer()
-        buffer.insert_text(buffer.get_length(), digit, len(digit.encode()))
+        # Track raw input ourselves so re-formatting doesn't lose chars.
+        self._raw_number += digit
+        self._render_entry()
 
     def _on_backspace(self, *_):
-        buffer = self.number_entry.get_buffer()
-        length = buffer.get_length()
-        if length > 0:
-            buffer.delete_text(length - 1, 1)
+        # Strip the last raw digit (not the last formatted char — that
+        # might be a space or paren we inserted ourselves).
+        if not self._raw_number:
+            return
+        self._raw_number = self._raw_number[:-1]
+        self._render_entry()
+
+    def _on_entry_changed(self, *_):
+        if self._suppress_reformat:
+            return
+        # The user typed into the entry directly. Capture the digit
+        # content and re-render.
+        text = self.number_entry.get_text()
+        # Keep only the bits we accept as input — digits, '+', '*', '#'.
+        cleaned = "".join(c for c in text if c.isdigit() or c in "+*#")
+        if cleaned != self._raw_number:
+            self._raw_number = cleaned
+            self._render_entry()
+
+    def _render_entry(self) -> None:
+        self._suppress_reformat = True
+        try:
+            self.number_entry.set_text(format_as_typed(self._raw_number))
+            # Park the cursor at the end so the next digit lands there.
+            self.number_entry.set_position(-1)
+        finally:
+            self._suppress_reformat = False
 
     def _parse_entry(self) -> str | None:
-        text = self.number_entry.get_text().strip()
-        normalized = normalize_e164(text, default_country="US")
+        # Use the raw input we've been tracking, not the formatted text
+        # — normalize_e164 strips formatting characters but it's
+        # cleaner to start from the user's original digits.
+        normalized = normalize_e164(self._raw_number, default_country="US")
         if not normalized:
-            log.info("dial: could not parse %r as a phone number", text)
+            log.info("dial: could not parse %r as a phone number",
+                     self._raw_number)
             self.activate_action("win.toast", GLib.Variant("s", "Invalid number"))
             return None
         return normalized
