@@ -57,19 +57,25 @@ def _ensure_gst() -> bool:
 # Pipeline
 # ──────────────────────────────────────────────────────────────────────
 
-def _pipeline_desc(turn_uri: str | None = None) -> str:
-    parts = [
-        "webrtcbin name=webrtcbin",
-        "bundle-policy=max-bundle",
-        "stun-server=stun://stun.l.google.com:19302",
-    ]
+def _build_webrtcbin(turn_uri: str | None = None) -> Gst.Element:
+    """Construct the webrtcbin element by hand.
+
+    NOTE: We used to do this via Gst.parse_launch("webrtcbin name=...
+    ...") but parse_launch returns the inner element directly when the
+    description has only one element — there's no enclosing GstPipeline
+    to call get_by_name on. Build the pipeline explicitly.
+    """
+    el = Gst.ElementFactory.make("webrtcbin", "webrtcbin")
+    if el is None:
+        raise RuntimeError("webrtcbin factory missing")
+    el.set_property("bundle-policy", 3)  # max-bundle
+    el.set_property("stun-server", "stun://stun.l.google.com:19302")
     if turn_uri:
         # webrtcbin accepts turn-server=turn://user:cred@host:port for a
-        # single TURN. (Multiple TURNs go via the add-turn-server signal;
-        # chat.rob.land's coturn presents both UDP and TCP at the same
-        # host so one URI is enough.)
-        parts.append(f"turn-server={turn_uri}")
-    return " ".join(parts)
+        # single TURN. chat.rob.land's coturn presents UDP at this host,
+        # which is enough for the basic case.
+        el.set_property("turn-server", turn_uri)
+    return el
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -290,11 +296,12 @@ class AudioEngine(GObject.Object):
         if self._pipeline is not None:
             return True
         try:
-            self._pipeline = Gst.parse_launch(_pipeline_desc(self._turn_uri))
-        except GLib.Error as exc:
-            log.warning("failed to build pipeline: %s", exc.message)
+            self._webrtc = _build_webrtcbin(self._turn_uri)
+        except (GLib.Error, RuntimeError) as exc:
+            log.warning("failed to build webrtcbin: %s", exc)
             return False
-        self._webrtc = self._pipeline.get_by_name("webrtcbin")
+        self._pipeline = Gst.Pipeline.new("call-pipeline")
+        self._pipeline.add(self._webrtc)
 
         # Audio capture: pulsesrc → 8kHz mono → mulawenc → rtppcmupay → webrtcbin.
         # rtppcmupay's pt property is 0 (the universal PCMU PT). The
