@@ -141,17 +141,20 @@ class CallManager(GObject.Object):
         sess = self._session
         if sess is None or sess.state != STATE_RINGING:
             return
-        # XEP-0353 §6.2: respond to the user's own bare JID with proceed
-        # AND broadcast accept to the original peer. cheogram doesn't
-        # need the proceed-to-self path because it's a gateway and not
-        # a multi-device endpoint, but we follow the spec.
+        # XEP-0353 §6.2 (corrected — these used to be swapped, which
+        # made the PSTN gateway give up after 3s because it never saw
+        # its proceed signal):
+        #   - <proceed/> to the *caller's* full JID — tells them to
+        #     start the Jingle session-initiate.
+        #   - <accept/>  to our *own bare JID* — informs other
+        #     resources on this account that we're handling the call
+        #     here, so they stop ringing.
         own_bare = self._account.jid
-        self._xmpp.send_jmi("proceed", sess.session_id, own_bare)
-        self._xmpp.send_jmi("accept", sess.session_id, sess.peer_jid)
-        # Start the Jingle audio session — answer with our SDP. If the
-        # peer's session-initiate already arrived (raced our accept),
-        # use the buffered initiate. Otherwise we'll start the engine
-        # in _on_jingle_iq when it shows up.
+        self._xmpp.send_jmi("proceed", sess.session_id, sess.peer_jid)
+        self._xmpp.send_jmi("accept",  sess.session_id, own_bare)
+        # Start the Jingle audio session — the caller will follow up
+        # with session-initiate, which we answer. If that initiate
+        # already arrived (raced our proceed), use the buffered one.
         self._begin_jingle_incoming(sess)
         self._transition(sess, STATE_ACTIVE)
 
@@ -209,6 +212,12 @@ class CallManager(GObject.Object):
             # of the audio session-initiate.
             self._begin_jingle_outgoing(sess)
             self._transition(sess, STATE_ACTIVE)
+        elif action == "accept" and sess.state == STATE_RINGING and not incoming:
+            # XEP-0353 accept-to-self from another of our resources —
+            # the user took the call on another device. Silently
+            # dismiss with a distinct terminal so the UI can show
+            # 'answered elsewhere' rather than 'rejected'.
+            self._transition(sess, STATE_REJECTED)
         elif action == "accept" and sess.state == STATE_PROPOSING:
             # accept without an explicit proceed (cheogram does this for
             # certain endpoints). Same effect: we're the initiator.
