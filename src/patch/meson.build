@@ -20,8 +20,10 @@ python.install_sources(
     '__init__.py',
     '__main__.py',
     'account.py',
+    'audio.py',
     'calls.py',
     'contacts.py',
+    'jingle_session.py',
     'logging_setup.py',
     'main.py',
     'message_persister.py',
@@ -65,6 +67,8 @@ python.install_sources(
   files(
     'xmpp/__init__.py',
     'xmpp/client.py',
+    'xmpp/jingle.py',
+    'xmpp/turn.py',
   ),
   subdir: meson.project_name() / 'xmpp',
 )

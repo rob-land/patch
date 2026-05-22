@@ -1,15 +1,62 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Placeholder icon. Replace with a proper Adwaita-style asset before
-     shipping. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3584e4"/>
-      <stop offset="1" stop-color="#1c71d8"/>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#62a0ea"/>
+      <stop offset="100%" stop-color="#1c71d8"/>
+    </linearGradient>
+    <linearGradient id="patchHi" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.96"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.80"/>
     </linearGradient>
   </defs>
-  <rect x="8" y="8" width="112" height="112" rx="22" ry="22" fill="url(#bg)"/>
-  <text x="64" y="86" text-anchor="middle"
-        font-family="Cantarell, sans-serif" font-weight="bold"
-        font-size="80" fill="#ffffff">P</text>
+
+  <!-- GNOME-style rounded square canvas -->
+  <rect width="128" height="128" rx="28" ry="28" fill="url(#bg)"/>
+
+  <!-- Phone handset (classic dialer reference), rotated like the
+       standard Adwaita call-start glyph. -->
+  <g transform="rotate(-30 64 64)">
+    <path d="
+      M 36 44
+      C 36 38, 42 34, 48 34
+      L 56 34
+      C 60 34, 64 38, 64 42
+      L 64 50
+      C 64 56, 60 60, 56 60
+      L 54 60
+      L 80 86
+      L 78 88
+      C 74 92, 68 92, 64 88
+      L 38 62
+      C 36 60, 36 58, 36 56
+      Z
+      M 88 86
+      L 80 78
+      C 82 76, 86 76, 90 76
+      L 96 76
+      C 100 76, 104 80, 104 84
+      L 104 92
+      C 104 96, 100 100, 96 100
+      L 88 100
+      C 84 100, 80 96, 80 92
+      Z"
+      fill="url(#patchHi)"
+    />
+  </g>
+
+  <!-- 'Patch' / bandage diagonal across the handset. Two small white
+       dots evoke bandage adhesive pads — a literal reading of the
+       project name. -->
+  <g>
+    <rect x="32" y="86" width="64" height="12" rx="3"
+          transform="rotate(-22 64 92)"
+          fill="#ffffff" opacity="0.42"/>
+    <circle cx="40" cy="90" r="2.2"
+            transform="rotate(-22 64 92)"
+            fill="#ffffff" opacity="0.85"/>
+    <circle cx="88" cy="98" r="2.2"
+            transform="rotate(-22 64 92)"
+            fill="#ffffff" opacity="0.85"/>
+  </g>
 </svg>

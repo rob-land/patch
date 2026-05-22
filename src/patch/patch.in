@@ -15,6 +15,15 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 gi.require_version('Secret', '1')
 gi.require_version('Soup', '3.0')
+# GStreamer pieces for the Jingle audio engine — webrtcbin in
+# gst-plugins-bad, SDP message parsing in gst-plugins-base. Optional
+# at import time so a runtime without them still loads the app.
+try:
+    gi.require_version('Gst', '1.0')
+    gi.require_version('GstWebRTC', '1.0')
+    gi.require_version('GstSdp', '1.0')
+except ValueError:
+    pass
 # Folks is optional — sandbox runtimes that don't ship the libfolks
 # typelib (the Flatpak GNOME runtime, for one) still get a working
 # app, just without contact-name resolution. ContactsManager has its

@@ -1,0 +1,399 @@
+"""GStreamer webrtcbin audio engine + Jingle ↔ SDP translation.
+
+We delegate ICE, DTLS-SRTP, and RTP to webrtcbin. Our job is to:
+
+  1. Build a pipeline that captures local audio (Opus, 48kHz stereo) and
+     plays back the remote stream.
+  2. Drive the WebRTC negotiation state machine: create-offer / answer,
+     set-local-description, set-remote-description.
+  3. Translate the SDP produced by webrtcbin into the Jingle XML the
+     cheogram/JMP gateway expects, and vice versa.
+  4. Forward local ICE candidates to the peer as Jingle transport-info
+     stanzas, and inject inbound candidates back into webrtcbin.
+
+This is enough for one-to-one audio calls. Video, screen-sharing, DTMF,
+and BUNDLE/RTCP-mux fallbacks for older endpoints are not implemented.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import uuid
+
+from gi.repository import GLib, GObject, Gst, GstSdp, GstWebRTC
+
+from patch.xmpp import jingle as jingle_mod
+
+log = logging.getLogger(__name__)
+
+_GST_INITIALISED = False
+
+
+def _ensure_gst() -> bool:
+    global _GST_INITIALISED
+    if _GST_INITIALISED:
+        return True
+    Gst.init(None)
+    if not Gst.ElementFactory.find("webrtcbin"):
+        log.warning("webrtcbin GStreamer element missing; calls have no audio")
+        return False
+    _GST_INITIALISED = True
+    return True
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Pipeline
+# ──────────────────────────────────────────────────────────────────────
+
+# Capture mic → opus → webrtcbin. The "audio" pad name on webrtcbin is
+# the canonical request-pad template name; we add an audio transceiver
+# below to make it directional.
+#
+# We use pulsesrc/pulsesink so it works on both Phosh (PipeWire's
+# Pulse compatibility layer) and a desktop Fedora dev host. autoaudio*
+# would do too but pulse* gives us more predictable device routing.
+def _pipeline_desc(turn_uri: str | None = None) -> str:
+    parts = [
+        "webrtcbin name=webrtcbin",
+        "bundle-policy=max-bundle",
+        "stun-server=stun://stun.l.google.com:19302",
+    ]
+    if turn_uri:
+        # webrtcbin accepts turn-server=turn://user:cred@host:port for a
+        # single TURN. (Multiple TURNs go via the add-turn-server signal;
+        # chat.rob.land's coturn presents both UDP and TCP at the same
+        # host so one URI is enough.)
+        parts.append(f"turn-server={turn_uri}")
+    return " ".join(parts)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# SDP wrapping
+# ──────────────────────────────────────────────────────────────────────
+#
+# We get an SDP string out of webrtcbin and have to translate it into a
+# Jingle <content> with <description> + <transport>. The mapping is
+# spelled out in XEP-0167 §10. We do enough of it for one audio content
+# with Opus + DTLS-SRTP + ICE-UDP, which is what cheogram speaks.
+
+_OPUS_PT_PATTERN = re.compile(r"\bopus/\d+", re.IGNORECASE)
+
+
+def sdp_to_jingle_description(sdp_text: str) -> dict:
+    """Extract Jingle description + transport bits from an SDP string.
+
+    Returns a dict with: payload_types, ice_ufrag, ice_pwd,
+    dtls_fingerprint, dtls_hash, dtls_setup. The caller plugs these
+    into jingle.session_initiate / session_accept.
+    """
+    # Trim to the first media block (m=audio …). cheogram doesn't expect
+    # multiple media; webrtcbin shouldn't emit any since we only add one
+    # transceiver.
+    m_idx = sdp_text.find("m=")
+    if m_idx == -1:
+        raise ValueError("SDP has no m= line")
+    session = sdp_text[:m_idx]
+    media = sdp_text[m_idx:]
+
+    payload_types = _parse_payload_types(media)
+    ice_ufrag, ice_pwd = _parse_ice(media) or _parse_ice(session) or ("", "")
+    fp_hash, fp_value, fp_setup = (_parse_fingerprint(media)
+                                    or _parse_fingerprint(session)
+                                    or ("sha-256", "", "actpass"))
+    return {
+        "payload_types":    payload_types,
+        "ice_ufrag":        ice_ufrag,
+        "ice_pwd":          ice_pwd,
+        "dtls_fingerprint": fp_value,
+        "dtls_hash":        fp_hash,
+        "dtls_setup":       fp_setup,
+    }
+
+
+def jingle_content_to_sdp(content: dict, *, role: str) -> str:
+    """Build the SDP webrtcbin will accept as a remote description.
+
+    `role` is "offer" or "answer". For "offer" we mark the m= line as
+    sendrecv; for "answer" we mirror whatever the peer offered.
+
+    `content` is one entry from jingle.parse_jingle()['contents'].
+    """
+    desc = content["description"] or {}
+    transport = content["transport"] or {}
+    fp = transport.get("fingerprint") or {}
+    pts = desc.get("payload_types") or []
+    pt_ids = " ".join(p["id"] for p in pts) or "111"
+
+    lines = [
+        "v=0",
+        f"o=- {uuid.uuid4().int >> 96} 2 IN IP4 127.0.0.1",
+        "s=-",
+        "t=0 0",
+        "a=group:BUNDLE 0",
+        "a=msid-semantic:WMS *",
+        f"m=audio 9 UDP/TLS/RTP/SAVPF {pt_ids}",
+        "c=IN IP4 0.0.0.0",
+        "a=rtcp:9 IN IP4 0.0.0.0",
+        f"a=ice-ufrag:{transport.get('ufrag') or ''}",
+        f"a=ice-pwd:{transport.get('pwd') or ''}",
+        "a=ice-options:trickle",
+    ]
+    if fp.get("value"):
+        lines.append(f"a=fingerprint:{fp.get('hash', 'sha-256')} {fp['value']}")
+    setup = fp.get("setup") or "active"
+    lines.append(f"a=setup:{setup}")
+    lines.append("a=mid:0")
+    lines.append("a=sendrecv")
+    lines.append("a=rtcp-mux")
+    for p in pts:
+        rate = p.get("clockrate", "48000")
+        channels = p.get("channels", "1")
+        lines.append(f"a=rtpmap:{p['id']} {p['name']}/{rate}/{channels}")
+        params = p.get("parameters") or {}
+        if params:
+            fmtp = ";".join(f"{k}={v}" for k, v in params.items())
+            lines.append(f"a=fmtp:{p['id']} {fmtp}")
+    return "\r\n".join(lines) + "\r\n"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Low-level parsers
+# ──────────────────────────────────────────────────────────────────────
+
+def _parse_payload_types(media: str) -> list[dict]:
+    """Each m=audio line carries the supported payload type ids; rtpmap +
+    fmtp lines describe them.  We restrict to opus — cheogram's MMS path
+    accepts the gateway-canonical opus profile and nothing else."""
+    rtpmaps = {}     # id -> (name, clockrate, channels)
+    fmtps   = {}     # id -> {param: value}
+    for line in media.splitlines():
+        if line.startswith("a=rtpmap:"):
+            try:
+                head, body = line[len("a=rtpmap:"):].split(" ", 1)
+            except ValueError:
+                continue
+            parts = body.split("/")
+            name = parts[0]
+            clock = parts[1] if len(parts) > 1 else "0"
+            channels = parts[2] if len(parts) > 2 else "1"
+            rtpmaps[head] = (name, clock, channels)
+        elif line.startswith("a=fmtp:"):
+            try:
+                head, body = line[len("a=fmtp:"):].split(" ", 1)
+            except ValueError:
+                continue
+            params = {}
+            for kv in body.split(";"):
+                if "=" in kv:
+                    k, v = kv.split("=", 1)
+                    params[k.strip()] = v.strip()
+            fmtps[head] = params
+
+    pts = []
+    for pt_id, (name, clock, channels) in rtpmaps.items():
+        if not _OPUS_PT_PATTERN.search(f"{name}/{clock}"):
+            continue
+        d = {"id": pt_id, "name": name, "clockrate": clock, "channels": channels}
+        if fmtps.get(pt_id):
+            d["parameters"] = fmtps[pt_id]
+        pts.append(d)
+    # Fall back to a canonical opus entry if the SDP didn't carry one.
+    if not pts:
+        pts = [{"id": "111", "name": "opus", "clockrate": "48000", "channels": "2"}]
+    return pts
+
+
+def _parse_ice(block: str) -> tuple[str, str] | None:
+    ufrag = pwd = None
+    for line in block.splitlines():
+        if line.startswith("a=ice-ufrag:"):
+            ufrag = line[len("a=ice-ufrag:"):].strip()
+        elif line.startswith("a=ice-pwd:"):
+            pwd = line[len("a=ice-pwd:"):].strip()
+    if ufrag and pwd:
+        return ufrag, pwd
+    return None
+
+
+def _parse_fingerprint(block: str) -> tuple[str, str, str] | None:
+    fp_hash = fp_value = setup = None
+    for line in block.splitlines():
+        if line.startswith("a=fingerprint:"):
+            parts = line[len("a=fingerprint:"):].split(" ", 1)
+            if len(parts) == 2:
+                fp_hash, fp_value = parts[0].strip(), parts[1].strip()
+        elif line.startswith("a=setup:"):
+            setup = line[len("a=setup:"):].strip()
+    if fp_hash and fp_value:
+        return fp_hash, fp_value, setup or "actpass"
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Audio engine
+# ──────────────────────────────────────────────────────────────────────
+
+class AudioEngine(GObject.Object):
+    """One in-flight WebRTC audio session.
+
+    Lifecycle:
+      e = AudioEngine(); e.start(direction="outgoing")
+      e.create_offer(callback=on_sdp_offer)   # for outgoing
+      # ... wrap SDP in Jingle, send ...
+      e.set_remote_description(peer_sdp)      # peer's answer arrives
+      e.add_remote_candidate(sdp_line)        # peer's trickle ICE
+
+    Or for incoming:
+      e.start(direction="incoming")
+      e.set_remote_description(peer_offer_sdp)
+      e.create_answer(callback=on_sdp_answer)
+      # send Jingle session-accept, then trickle ICE
+
+    Signals:
+      local-candidate(sdp_candidate_line: str)
+        Emit whenever webrtcbin produces a new ICE candidate. Caller
+        wraps in a Jingle transport-info.
+    """
+
+    __gtype_name__ = "PatchAudioEngine"
+
+    __gsignals__ = {
+        "local-candidate":  (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "ice-state-change": (GObject.SignalFlags.RUN_FIRST, None, (int,)),
+    }
+
+    def __init__(self, turn_uri: str | None = None):
+        super().__init__()
+        self._pipeline: Gst.Pipeline | None = None
+        self._webrtc:   Gst.Element  | None = None
+        self._turn_uri = turn_uri
+
+    def start(self, direction: str) -> bool:
+        """Build the pipeline and add the audio transceiver."""
+        if not _ensure_gst():
+            return False
+        if self._pipeline is not None:
+            return True
+        try:
+            self._pipeline = Gst.parse_launch(_pipeline_desc(self._turn_uri))
+        except GLib.Error as exc:
+            log.warning("failed to build pipeline: %s", exc.message)
+            return False
+        self._webrtc = self._pipeline.get_by_name("webrtcbin")
+
+        # Audio capture: pulsesrc → opusenc → rtpopuspay → webrtcbin.
+        mic = Gst.parse_bin_from_description(
+            "pulsesrc ! audioconvert ! audioresample "
+            "! audio/x-raw,rate=48000,channels=1 "
+            "! opusenc bitrate=24000 inband-fec=true "
+            "! rtpopuspay pt=111 "
+            "! application/x-rtp,media=audio,encoding-name=OPUS,payload=111,clock-rate=48000",
+            True)
+        self._pipeline.add(mic)
+        if not mic.link(self._webrtc):
+            log.warning("failed to link mic into webrtcbin")
+        # Playback: pad-added → rtpopusdepay → opusdec → pulsesink.
+        self._webrtc.connect("pad-added", self._on_pad_added)
+        self._webrtc.connect("on-ice-candidate", self._on_ice_candidate)
+        self._webrtc.connect("notify::ice-connection-state",
+                             self._on_ice_state_change)
+
+        ret = self._pipeline.set_state(Gst.State.PLAYING)
+        log.info("audio engine started (%s, gst state=%s)",
+                 direction, ret.value_nick)
+        return True
+
+    def stop(self) -> None:
+        if self._pipeline is None:
+            return
+        self._pipeline.set_state(Gst.State.NULL)
+        self._pipeline = None
+        self._webrtc = None
+        log.info("audio engine stopped")
+
+    # -- offer / answer ------------------------------------------------
+
+    def create_offer(self, callback) -> None:
+        """callback(sdp_text: str)"""
+        self._webrtc.emit(
+            "create-offer", None,
+            Gst.Promise.new_with_change_func(self._on_offer_created,
+                                              callback, None))
+
+    def create_answer(self, callback) -> None:
+        self._webrtc.emit(
+            "create-answer", None,
+            Gst.Promise.new_with_change_func(self._on_answer_created,
+                                              callback, None))
+
+    def set_remote_description(self, sdp_text: str, sdp_type: str = "answer") -> None:
+        """sdp_type ∈ {"offer", "answer"} as per WebRTC."""
+        sdp = self._parse_sdp(sdp_text)
+        if sdp is None:
+            return
+        desc = GstWebRTC.WebRTCSessionDescription.new(
+            GstWebRTC.WebRTCSDPType.OFFER if sdp_type == "offer"
+            else GstWebRTC.WebRTCSDPType.ANSWER,
+            sdp)
+        self._webrtc.emit(
+            "set-remote-description", desc,
+            Gst.Promise.new_with_change_func(lambda *_: None, None, None))
+
+    def add_remote_candidate(self, sdp_line: str, mline_index: int = 0) -> None:
+        """SDP-formatted `candidate:…` line (no leading `a=`)."""
+        if sdp_line.startswith("a="):
+            sdp_line = sdp_line[2:]
+        self._webrtc.emit("add-ice-candidate", mline_index, sdp_line)
+
+    # -- internal callbacks --------------------------------------------
+
+    def _on_offer_created(self, promise, callback, _user):
+        reply = promise.get_reply()
+        offer = reply.get_value("offer")
+        promise = Gst.Promise.new_with_change_func(
+            lambda *_: None, None, None)
+        self._webrtc.emit("set-local-description", offer, promise)
+        sdp_text = offer.sdp.as_text()
+        GLib.idle_add(callback, sdp_text)
+
+    def _on_answer_created(self, promise, callback, _user):
+        reply = promise.get_reply()
+        answer = reply.get_value("answer")
+        promise = Gst.Promise.new_with_change_func(
+            lambda *_: None, None, None)
+        self._webrtc.emit("set-local-description", answer, promise)
+        sdp_text = answer.sdp.as_text()
+        GLib.idle_add(callback, sdp_text)
+
+    def _on_pad_added(self, _bin, pad: Gst.Pad):
+        if pad.get_direction() != Gst.PadDirection.SRC:
+            return
+        log.info("webrtc remote pad added: %s", pad.get_name())
+        sink = Gst.parse_bin_from_description(
+            "rtpopusdepay ! opusdec ! audioconvert ! audioresample ! pulsesink",
+            True)
+        self._pipeline.add(sink)
+        sink.sync_state_with_parent()
+        pad.link(sink.get_static_pad("sink"))
+
+    def _on_ice_candidate(self, _bin, mline_index: int, candidate: str):
+        log.debug("ice candidate (m=%d): %s", mline_index, candidate)
+        self.emit("local-candidate", candidate)
+
+    def _on_ice_state_change(self, *_):
+        state = self._webrtc.get_property("ice-connection-state")
+        log.info("ice connection state -> %s", state.value_nick)
+        self.emit("ice-state-change", int(state))
+
+    def _parse_sdp(self, sdp_text: str) -> GstSdp.SDPMessage | None:
+        result, sdp = GstSdp.SDPMessage.new()
+        if result != GstSdp.SDPResult.OK:
+            log.warning("failed to allocate SDPMessage")
+            return None
+        sdp_bytes = sdp_text.encode("utf-8")
+        result = GstSdp.sdp_message_parse_buffer(sdp_bytes, sdp)
+        if result != GstSdp.SDPResult.OK:
+            log.warning("failed to parse remote SDP")
+            return None
+        return sdp

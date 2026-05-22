@@ -29,6 +29,8 @@ import time
 from gi.repository import GObject
 
 from patch import numfmt
+from patch.jingle_session import JingleSession
+from patch.xmpp import jingle as jingle_mod
 
 log = logging.getLogger(__name__)
 
@@ -91,8 +93,15 @@ class CallManager(GObject.Object):
         # Time the current session began, so the log entry gets the
         # original timestamp on terminal transition.
         self._session_started_at: float = 0.0
+        # Active Jingle session — owns the GStreamer pipeline + handles
+        # the SDP/ICE exchange. None when there's no audio in flight.
+        self._jingle: JingleSession | None = None
+        # For incoming calls we may receive the peer's session-initiate
+        # before our user has tapped Accept. Stash it.
+        self._pending_initiate: dict | None = None
 
         self._xmpp.connect("jmi-event", self._on_jmi)
+        self._xmpp.connect("jingle-iq", self._on_jingle_iq)
 
     # -- outgoing --------------------------------------------------------
 
@@ -135,6 +144,11 @@ class CallManager(GObject.Object):
         own_bare = self._account.jid
         self._xmpp.send_jmi("proceed", sess.session_id, own_bare)
         self._xmpp.send_jmi("accept", sess.session_id, sess.peer_jid)
+        # Start the Jingle audio session — answer with our SDP. If the
+        # peer's session-initiate already arrived (raced our accept),
+        # use the buffered initiate. Otherwise we'll start the engine
+        # in _on_jingle_iq when it shows up.
+        self._begin_jingle_incoming(sess)
         self._transition(sess, STATE_ACTIVE)
 
     def reject_incoming(self) -> None:
@@ -152,9 +166,9 @@ class CallManager(GObject.Object):
         sess = self._session
         if sess is None or sess.state != STATE_ACTIVE:
             return
-        # Without a real Jingle session in place, "hangup" is a no-op
-        # at the protocol level. Once Jingle audio lands, this will
-        # send session-terminate. For now we just close out the UI.
+        if self._jingle is not None:
+            self._jingle.send_session_terminate("success")
+            self._jingle = None
         self._transition(sess, STATE_ENDED)
 
     # -- inbound from XmppClient ----------------------------------------
@@ -184,13 +198,81 @@ class CallManager(GObject.Object):
             return
 
         if action == "proceed" and sess.state == STATE_PROPOSING:
+            # Peer is ready for the Jingle session. We're the initiator
+            # of the audio session-initiate.
+            self._begin_jingle_outgoing(sess)
             self._transition(sess, STATE_ACTIVE)
         elif action == "accept" and sess.state == STATE_PROPOSING:
+            # accept without an explicit proceed (cheogram does this for
+            # certain endpoints). Same effect: we're the initiator.
+            self._begin_jingle_outgoing(sess)
             self._transition(sess, STATE_ACTIVE)
         elif action == "reject":
             self._transition(sess, STATE_REJECTED)
         elif action == "retract":
             self._transition(sess, STATE_RETRACTED)
+
+    # -- Jingle audio orchestration -------------------------------------
+
+    def _begin_jingle_outgoing(self, sess: CallSession) -> None:
+        if self._jingle is not None:
+            return
+        # The peer in JMI propose was the bare gateway JID. For the
+        # actual Jingle session we use the same.
+        own_jid_full = self._own_full_jid()
+        self._jingle = JingleSession(
+            self._xmpp, sid=sess.session_id,
+            peer_jid=sess.peer_jid, own_jid=own_jid_full,
+            incoming=False)
+        self._jingle.start_outgoing()
+
+    def _begin_jingle_incoming(self, sess: CallSession) -> None:
+        if self._jingle is not None:
+            return
+        own_jid_full = self._own_full_jid()
+        self._jingle = JingleSession(
+            self._xmpp, sid=sess.session_id,
+            peer_jid=sess.peer_jid, own_jid=own_jid_full,
+            incoming=True)
+        if self._pending_initiate is not None:
+            self._jingle.start_incoming(self._pending_initiate)
+            self._pending_initiate = None
+        # Otherwise: nothing to do yet. _on_jingle_iq routes the peer's
+        # session-initiate to JingleSession.start_incoming when it
+        # arrives. The engine is built lazily on first use.
+
+    def _on_jingle_iq(self, _xmpp, parsed, from_jid, _iq_id):
+        action = parsed.get("action")
+        sid = parsed.get("sid")
+        sess = self._session
+        # Stash session-initiate even if we don't have a CallSession yet
+        # — JMI propose may race the Jingle initiate, especially on slow
+        # links. _begin_jingle_incoming will pick it up on accept.
+        if action == "session-initiate":
+            if self._jingle is not None and self._jingle.sid == sid:
+                self._jingle.start_incoming(parsed)
+            else:
+                self._pending_initiate = parsed
+            return
+        if self._jingle is None or self._jingle.sid != sid:
+            log.debug("jingle %s for unknown sid %s — ignored", action, sid)
+            return
+        if action == "session-accept":
+            self._jingle.handle_session_accept(parsed)
+        elif action == "transport-info":
+            self._jingle.handle_transport_info(parsed)
+        elif action == "session-terminate":
+            self._jingle.handle_session_terminate(parsed)
+            self._jingle = None
+            if sess and sess.state == STATE_ACTIVE:
+                self._transition(sess, STATE_ENDED)
+
+    def _own_full_jid(self) -> str:
+        bare = self._account.jid
+        try:
+            return self._xmpp._client.get_bound_jid().full()  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return bare
 
     # -- helpers --------------------------------------------------------
 

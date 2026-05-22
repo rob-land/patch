@@ -1,7 +1,33 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Placeholder symbolic icon. Replace before shipping. -->
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <text x="8" y="13" text-anchor="middle"
-        font-family="Cantarell, sans-serif" font-weight="bold"
-        font-size="13" fill="#222222">P</text>
+<!-- Adwaita symbolic — single colour (currentColor), pure shape, no fill
+     beyond the silhouette. Read at 16px. The handset is the icon's
+     subject; the bandage diagonal is implied by orientation only. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" width="16" height="16" fill="#222222">
+  <g transform="rotate(-30 8 8)">
+    <path d="
+      M 3.6 4.2
+      C 3.6 3.4, 4.2 2.8, 5 2.8
+      L 6.4 2.8
+      C 7 2.8, 7.6 3.4, 7.6 4
+      L 7.6 5.2
+      C 7.6 6, 7 6.6, 6.4 6.6
+      L 6.2 6.6
+      L 9.8 10.2
+      L 9.6 10.4
+      C 9 11, 8.2 11, 7.6 10.4
+      L 4 6.8
+      C 3.8 6.6, 3.6 6.4, 3.6 6.2
+      Z
+      M 10.8 11.2
+      L 9.8 10.2
+      C 10 10, 10.4 9.8, 10.6 9.8
+      L 12 9.8
+      C 12.6 9.8, 13.2 10.4, 13.2 11
+      L 13.2 12.4
+      C 13.2 13, 12.6 13.6, 12 13.6
+      L 10.6 13.6
+      C 10 13.6, 9.4 13, 9.4 12.4
+      Z"
+    />
+  </g>
 </svg>

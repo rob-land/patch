@@ -27,6 +27,8 @@ from nbxmpp.modules.misc import unwrap_mam
 from nbxmpp.namespaces import Namespace
 from nbxmpp.protocol import JID, Iq, Message
 
+from patch.xmpp import jingle as jingle_mod
+
 from patch import account as account_mod
 
 log = logging.getLogger(__name__)
@@ -61,6 +63,9 @@ class XmppClient(GObject.Object):
         # peer_jid (str, full)        — the JID we're talking to
         # incoming (bool)             — was this stanza FROM the peer?
         "jmi-event":        (GObject.SignalFlags.RUN_FIRST, None, (str, str, str, bool)),
+        # Parsed Jingle iq (dict per xmpp.jingle.parse_jingle), full FROM
+        # of the inbound iq, and the iq id for the caller to ACK.
+        "jingle-iq":        (GObject.SignalFlags.RUN_FIRST, None, (object, str, str)),
     }
 
     def __init__(self, account, store=None):
@@ -311,10 +316,23 @@ class XmppClient(GObject.Object):
         self._schedule_reconnect()
 
     def _on_stanza_received(self, _client, _signal_name, stanza):
+        name = stanza.getName()
+        if name == "iq" and stanza.getAttr("type") == "set":
+            jingle = jingle_mod.parse_jingle(stanza)
+            if jingle is not None:
+                from_jid = stanza.getAttr("from") or ""
+                iq_id = stanza.getAttr("id") or ""
+                log.info("jingle %s sid=%s from=%s",
+                         jingle.get("action"), jingle.get("sid"), from_jid)
+                self.emit("jingle-iq", jingle, from_jid, iq_id)
+                # ACK the iq immediately; the session logic handles the
+                # actual state transition out of band.
+                self._send_iq_result(stanza)
+                return
         # We only handle <message> here. Presence, IQ, etc. flow into
         # nbxmpp's internal dispatcher modules and we can hook those
         # separately if needed.
-        if stanza.getName() != "message":
+        if name != "message":
             return
 
         own_jid = JID.from_string(self._account.jid)
@@ -434,6 +452,32 @@ class XmppClient(GObject.Object):
                  (" [oob " + attachment_url + "]") if attachment_url else "")
         self.emit("message-received", bare, body, incoming, timestamp,
                   attachment_url)
+
+    # -- iq helpers ------------------------------------------------------
+
+    def _send_iq_result(self, request) -> None:
+        if not self._client or not self._client.is_stream_authenticated:
+            return
+        from_jid = request.getAttr("from") or ""
+        iq_id    = request.getAttr("id") or ""
+        result = Iq(typ="result", to=from_jid)
+        if iq_id:
+            result.setAttr("id", iq_id)
+        try:
+            self._client.send_stanza(result)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("ack iq failed: %s", exc)
+
+    def send_iq(self, iq: Iq) -> bool:
+        if not self._client or not self._client.is_stream_authenticated:
+            log.warning("send_iq: not connected")
+            return False
+        try:
+            self._client.send_stanza(iq)
+        except Exception as exc:
+            log.exception("send_iq failed: %s", exc)
+            return False
+        return True
 
     # -- XEP-0353 Jingle Message Initiation ------------------------------
 
