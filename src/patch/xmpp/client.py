@@ -511,7 +511,13 @@ class XmppClient(GObject.Object):
         if not self._client or not self._client.is_stream_authenticated:
             log.warning("send_jmi: not connected");
             return False
-        msg = Message(to=peer_jid)
+        # Match Cheogram-Android / cheogram-bot's exact wire shape:
+        #   type="chat"  — XEP-0353 examples + most peer impls expect
+        #                  chat-typed messages so they route via the
+        #                  carbon + offline-storage paths.
+        #   <store/>     — XEP-0334 storage hint, so a propose lands in
+        #                  the peer's archive even if no resource is on.
+        msg = Message(to=peer_jid, typ="chat")
         elem = msg.addChild(action, namespace=JMI_NS, attrs={"id": session_id})
         if action == "propose":
             # XEP-0353 requires at least one <description> child describing
@@ -522,6 +528,7 @@ class XmppClient(GObject.Object):
                 namespace="urn:xmpp:jingle:apps:rtp:1",
                 attrs={"media": media},
             )
+        msg.addChild("store", namespace="urn:xmpp:hints")
         try:
             self._client.send_stanza(msg)
         except Exception as exc:  # noqa: BLE001
