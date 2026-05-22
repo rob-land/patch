@@ -122,9 +122,14 @@ class JingleSession(GObject.Object):
     def handle_session_accept(self, parsed: dict) -> None:
         contents = parsed.get("contents") or []
         if not contents:
+            log.warning("session-accept has no contents")
+            return
+        if self.engine is None:
+            log.warning("session-accept arrived before engine ready")
             return
         sdp = jingle_content_to_sdp(contents[0], role="answer")
-        log.debug("remote answer translated SDP:\n%s", sdp)
+        log.info("session-accept: %d byte SDP applied", len(sdp))
+        log.debug("remote answer SDP:\n%s", sdp)
         self.engine.set_remote_description(sdp, sdp_type="answer")
         self._remote_desc_set = True
         for line in self._pending_remote_candidates:
@@ -133,14 +138,19 @@ class JingleSession(GObject.Object):
 
     def handle_transport_info(self, parsed: dict) -> None:
         contents = parsed.get("contents") or []
+        added = pended = 0
         for content in contents:
             transport = content.get("transport") or {}
             for cand in transport.get("candidates") or []:
                 line = jingle_mod.jingle_candidate_to_sdp(cand)
-                if self._remote_desc_set:
+                if self._remote_desc_set and self.engine is not None:
                     self.engine.add_remote_candidate(line)
+                    added += 1
                 else:
                     self._pending_remote_candidates.append(line)
+                    pended += 1
+        if added or pended:
+            log.info("transport-info: %d added, %d pending", added, pended)
 
     def handle_session_terminate(self, _parsed: dict) -> None:
         log.info("peer terminated session")

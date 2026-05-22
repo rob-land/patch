@@ -304,6 +304,14 @@ class CallManager(GObject.Object):
         self.emit("call-changed", sess)
         if sess.is_terminal:
             self._ringer.stop()
+            # Tear down any in-flight Jingle session — this used to be
+            # leaked when a call ended via JMI retract/reject, causing
+            # a later hangup() on a fresh call to fire session-terminate
+            # against the stale (older) sid and get back an
+            # unknown-session error.
+            if self._jingle is not None and self._jingle.sid == sess.session_id:
+                self._jingle.shutdown()
+                self._jingle = None
             self._log_call(sess)
             self.emit("call-ended", sess)
             # Keep `_session` around briefly so the UI can read terminal
