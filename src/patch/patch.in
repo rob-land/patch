@@ -8,6 +8,28 @@ import signal
 
 signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+# Enable detailed GStreamer debug logging for the WebRTC/DTLS path.
+# These env vars MUST be set before any GStreamer module is imported,
+# which is why this lives in the launcher rather than patch.audio. The
+# debug output goes to ~/.local/share/patch/gst.log alongside patch.log
+# so we can grep DTLS handshake state + RTP packet counts after a
+# failed call. Set PATCH_NO_GST_DEBUG=1 to skip (e.g. for prod).
+if not os.environ.get("PATCH_NO_GST_DEBUG"):
+    os.environ.setdefault("GST_DEBUG_NO_COLOR", "1")
+    os.environ.setdefault(
+        "GST_DEBUG",
+        "*:2,webrtcbin:5,webrtcice:5,webrtcdtls:5,"
+        "dtlsenc:5,dtlsdec:5,dtlsconnection:5,dtlssrtp*:5,"
+        "nice:4,niceice:4,nicestream:4")
+    _data = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    _gst_log_dir = os.path.join(_data, "patch")
+    try:
+        os.makedirs(_gst_log_dir, exist_ok=True)
+        os.environ.setdefault(
+            "GST_DEBUG_FILE", os.path.join(_gst_log_dir, "gst.log"))
+    except OSError:
+        pass
+
 pkgdatadir = '@PKGDATADIR@'
 
 import gi

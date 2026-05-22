@@ -288,6 +288,7 @@ class AudioEngine(GObject.Object):
         self._pipeline: Gst.Pipeline | None = None
         self._webrtc:   Gst.Element  | None = None
         self._turn_uri = turn_uri
+        self._stats_source: int = 0
 
     def start(self, direction: str) -> bool:
         """Build the pipeline and add the audio transceiver."""
@@ -347,15 +348,28 @@ class AudioEngine(GObject.Object):
         ret = self._pipeline.set_state(Gst.State.PLAYING)
         log.info("audio engine started (%s, gst state=%s)",
                  direction, ret.value_nick)
+        # Periodically dump webrtcbin's stats so we can see whether RTP
+        # is actually flowing in either direction. 3s cadence is enough
+        # to catch the first inbound packet without log spam.
+        self._stats_source = GLib.timeout_add_seconds(3, self._tick_stats)
         return True
 
     def stop(self) -> None:
+        if self._stats_source:
+            GLib.source_remove(self._stats_source)
+            self._stats_source = 0
         if self._pipeline is None:
             return
         self._pipeline.set_state(Gst.State.NULL)
         self._pipeline = None
         self._webrtc = None
         log.info("audio engine stopped")
+
+    def _tick_stats(self) -> bool:
+        if self._webrtc is None:
+            return False
+        self._dump_ice_stats()
+        return True  # keep firing
 
     # -- offer / answer ------------------------------------------------
 
@@ -412,15 +426,23 @@ class AudioEngine(GObject.Object):
         GLib.idle_add(callback, sdp_text)
 
     def _on_pad_added(self, _bin, pad: Gst.Pad):
+        direction = pad.get_direction().value_nick
+        try:
+            caps = pad.get_current_caps() or pad.query_caps(None)
+            caps_str = caps.to_string() if caps else "<no caps>"
+        except Exception as exc:  # noqa: BLE001
+            caps_str = f"<err {exc}>"
+        log.info("webrtc pad-added: name=%s direction=%s caps=%s",
+                 pad.get_name(), direction, caps_str)
         if pad.get_direction() != Gst.PadDirection.SRC:
             return
-        log.info("webrtc remote pad added: %s", pad.get_name())
         sink = Gst.parse_bin_from_description(
             "rtppcmudepay ! mulawdec ! audioconvert ! audioresample ! pulsesink",
             True)
         self._pipeline.add(sink)
         sink.sync_state_with_parent()
-        pad.link(sink.get_static_pad("sink"))
+        result = pad.link(sink.get_static_pad("sink"))
+        log.info("playback bin linked: %s", result.value_nick)
 
     def _on_ice_candidate(self, _bin, mline_index: int, candidate: str):
         log.debug("ice candidate (m=%d): %s", mline_index, candidate)
@@ -456,18 +478,40 @@ class AudioEngine(GObject.Object):
         if stats is None:
             log.info("ice stats: <empty>")
             return
-        # Stats is a GstStructure; iterate fields. Each field is itself
-        # a structure describing a stats entry (candidate, pair, etc.).
         n = stats.n_fields()
-        log.info("ice stats: %d entries", n)
+        # Aggregate a one-line summary plus per-entry details. Each
+        # field on the top-level stats structure is itself a structure
+        # whose name is the stats *kind* (candidate-pair, transport,
+        # inbound-rtp, outbound-rtp, etc.).
+        summary = []
+        details = []
         for i in range(n):
             name = stats.nth_field_name(i)
             sub  = stats.get_value(name)
             if not hasattr(sub, "to_string"):
                 continue
             kind = sub.get_name() if hasattr(sub, "get_name") else "?"
-            if "candidate" in kind or "pair" in kind or "ice" in kind:
-                log.info("  %s: %s", kind, sub.to_string())
+            interesting = any(k in kind for k in
+                              ("candidate", "pair", "ice",
+                               "transport", "inbound", "outbound"))
+            if not interesting:
+                continue
+            # Pull common fields into the one-liner.
+            extra = []
+            for key in ("packets-sent", "packets-received",
+                        "bytes-sent", "bytes-received", "state",
+                        "selected"):
+                try:
+                    val = sub.get_value(key)
+                except Exception:  # noqa: BLE001
+                    val = None
+                if val is not None:
+                    extra.append(f"{key}={val}")
+            summary.append(f"{kind}({','.join(extra)})" if extra else kind)
+            details.append(f"  {kind}: {sub.to_string()}")
+        log.info("stats: %s", " | ".join(summary) if summary else "<none>")
+        for line in details:
+            log.info(line)
 
     def _on_state_notify(self, _bin, pspec):
         try:
