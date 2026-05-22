@@ -1,8 +1,13 @@
 """GStreamer webrtcbin audio engine + Jingle ↔ SDP translation.
 
+Codec choice: **PCMU** (G.711 µ-law). Cheogram/JMP is a PSTN bridge
+and its session-initiate offers PCMU/G722/telephone-event — never
+Opus. PCMU is the universal SIP codec and is what makes the gateway
+actually connect the SIP side. We do not try to negotiate Opus.
+
 We delegate ICE, DTLS-SRTP, and RTP to webrtcbin. Our job is to:
 
-  1. Build a pipeline that captures local audio (Opus, 48kHz stereo) and
+  1. Build a pipeline that captures local audio (PCMU, 8kHz mono) and
      plays back the remote stream.
   2. Drive the WebRTC negotiation state machine: create-offer / answer,
      set-local-description, set-remote-description.
@@ -11,23 +16,29 @@ We delegate ICE, DTLS-SRTP, and RTP to webrtcbin. Our job is to:
   4. Forward local ICE candidates to the peer as Jingle transport-info
      stanzas, and inject inbound candidates back into webrtcbin.
 
-This is enough for one-to-one audio calls. Video, screen-sharing, DTMF,
-and BUNDLE/RTCP-mux fallbacks for older endpoints are not implemented.
+This is enough for one-to-one audio calls. Video, screen-sharing, DTMF
+output, multi-stream BUNDLE, and Opus negotiation are not implemented.
 """
 
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 
 from gi.repository import GLib, GObject, Gst, GstSdp, GstWebRTC
 
-from patch.xmpp import jingle as jingle_mod
-
 log = logging.getLogger(__name__)
 
 _GST_INITIALISED = False
+
+# Codecs we'll accept from the peer's offer, in order of preference.
+# PCMU is what cheogram/JMP serves; we keep G722 as a fallback because
+# it's also a common SIP codec, but we only have a pipeline path for
+# PCMU at the moment.
+_ACCEPTED_CODECS = {"PCMU", "G722"}
+# RFC 4733 DTMF events — we don't generate them yet but we accept the
+# payload type so the peer's SDP gets faithfully echoed back.
+_DTMF_CODEC = "telephone-event"
 
 
 def _ensure_gst() -> bool:
@@ -46,13 +57,6 @@ def _ensure_gst() -> bool:
 # Pipeline
 # ──────────────────────────────────────────────────────────────────────
 
-# Capture mic → opus → webrtcbin. The "audio" pad name on webrtcbin is
-# the canonical request-pad template name; we add an audio transceiver
-# below to make it directional.
-#
-# We use pulsesrc/pulsesink so it works on both Phosh (PipeWire's
-# Pulse compatibility layer) and a desktop Fedora dev host. autoaudio*
-# would do too but pulse* gives us more predictable device routing.
 def _pipeline_desc(turn_uri: str | None = None) -> str:
     parts = [
         "webrtcbin name=webrtcbin",
@@ -75,10 +79,7 @@ def _pipeline_desc(turn_uri: str | None = None) -> str:
 # We get an SDP string out of webrtcbin and have to translate it into a
 # Jingle <content> with <description> + <transport>. The mapping is
 # spelled out in XEP-0167 §10. We do enough of it for one audio content
-# with Opus + DTLS-SRTP + ICE-UDP, which is what cheogram speaks.
-
-_OPUS_PT_PATTERN = re.compile(r"\bopus/\d+", re.IGNORECASE)
-
+# with PCMU + DTLS-SRTP + ICE-UDP, which is what cheogram speaks.
 
 def sdp_to_jingle_description(sdp_text: str) -> dict:
     """Extract Jingle description + transport bits from an SDP string.
@@ -123,7 +124,15 @@ def jingle_content_to_sdp(content: dict, *, role: str) -> str:
     transport = content["transport"] or {}
     fp = transport.get("fingerprint") or {}
     pts = desc.get("payload_types") or []
-    pt_ids = " ".join(p["id"] for p in pts) or "111"
+    # Filter to codecs we can actually handle, but keep the peer's
+    # ordering so the m= line lists the audio PT first.
+    usable = [p for p in pts if (p.get("name") or "").upper() in
+              _ACCEPTED_CODECS or p.get("name") == _DTMF_CODEC]
+    if not usable:
+        # Cheogram's canonical PSTN profile — assume the peer just
+        # forgot to advertise.
+        usable = [{"id": "0", "name": "PCMU", "clockrate": "8000", "channels": "1"}]
+    pt_ids = " ".join(p["id"] for p in usable)
 
     lines = [
         "v=0",
@@ -141,13 +150,13 @@ def jingle_content_to_sdp(content: dict, *, role: str) -> str:
     ]
     if fp.get("value"):
         lines.append(f"a=fingerprint:{fp.get('hash', 'sha-256')} {fp['value']}")
-    setup = fp.get("setup") or "active"
+    setup = fp.get("setup") or "actpass"
     lines.append(f"a=setup:{setup}")
     lines.append("a=mid:0")
     lines.append("a=sendrecv")
     lines.append("a=rtcp-mux")
-    for p in pts:
-        rate = p.get("clockrate", "48000")
+    for p in usable:
+        rate = p.get("clockrate", "8000")
         channels = p.get("channels", "1")
         lines.append(f"a=rtpmap:{p['id']} {p['name']}/{rate}/{channels}")
         params = p.get("parameters") or {}
@@ -163,8 +172,9 @@ def jingle_content_to_sdp(content: dict, *, role: str) -> str:
 
 def _parse_payload_types(media: str) -> list[dict]:
     """Each m=audio line carries the supported payload type ids; rtpmap +
-    fmtp lines describe them.  We restrict to opus — cheogram's MMS path
-    accepts the gateway-canonical opus profile and nothing else."""
+    fmtp lines describe them. We keep PCMU/G722/telephone-event — that's
+    everything cheogram offers — and drop anything else (Opus etc.) so
+    the negotiated set actually intersects with the gateway."""
     rtpmaps = {}     # id -> (name, clockrate, channels)
     fmtps   = {}     # id -> {param: value}
     for line in media.splitlines():
@@ -192,15 +202,19 @@ def _parse_payload_types(media: str) -> list[dict]:
 
     pts = []
     for pt_id, (name, clock, channels) in rtpmaps.items():
-        if not _OPUS_PT_PATTERN.search(f"{name}/{clock}"):
+        upper = name.upper()
+        if upper not in _ACCEPTED_CODECS and name != _DTMF_CODEC:
             continue
         d = {"id": pt_id, "name": name, "clockrate": clock, "channels": channels}
         if fmtps.get(pt_id):
             d["parameters"] = fmtps[pt_id]
         pts.append(d)
-    # Fall back to a canonical opus entry if the SDP didn't carry one.
     if not pts:
-        pts = [{"id": "111", "name": "opus", "clockrate": "48000", "channels": "2"}]
+        # Fall back to a canonical PCMU + DTMF entry.
+        pts = [
+            {"id": "0",   "name": "PCMU",            "clockrate": "8000", "channels": "1"},
+            {"id": "101", "name": "telephone-event", "clockrate": "8000", "channels": "1"},
+        ]
     return pts
 
 
@@ -282,18 +296,20 @@ class AudioEngine(GObject.Object):
             return False
         self._webrtc = self._pipeline.get_by_name("webrtcbin")
 
-        # Audio capture: pulsesrc → opusenc → rtpopuspay → webrtcbin.
+        # Audio capture: pulsesrc → 8kHz mono → mulawenc → rtppcmupay → webrtcbin.
+        # rtppcmupay's payload type is 0 (the universal PCMU PT). The
+        # output caps tell webrtcbin to register a sendrecv audio
+        # transceiver carrying PCMU.
         mic = Gst.parse_bin_from_description(
             "pulsesrc ! audioconvert ! audioresample "
-            "! audio/x-raw,rate=48000,channels=1 "
-            "! opusenc bitrate=24000 inband-fec=true "
-            "! rtpopuspay pt=111 "
-            "! application/x-rtp,media=audio,encoding-name=OPUS,payload=111,clock-rate=48000",
+            "! audio/x-raw,rate=8000,channels=1 "
+            "! mulawenc ! rtppcmupay pt=0 "
+            "! application/x-rtp,media=audio,encoding-name=PCMU,payload=0,clock-rate=8000",
             True)
         self._pipeline.add(mic)
         if not mic.link(self._webrtc):
             log.warning("failed to link mic into webrtcbin")
-        # Playback: pad-added → rtpopusdepay → opusdec → pulsesink.
+        # Playback: pad-added → rtppcmudepay → mulawdec → pulsesink.
         self._webrtc.connect("pad-added", self._on_pad_added)
         self._webrtc.connect("on-ice-candidate", self._on_ice_candidate)
         self._webrtc.connect("notify::ice-connection-state",
@@ -371,7 +387,7 @@ class AudioEngine(GObject.Object):
             return
         log.info("webrtc remote pad added: %s", pad.get_name())
         sink = Gst.parse_bin_from_description(
-            "rtpopusdepay ! opusdec ! audioconvert ! audioresample ! pulsesink",
+            "rtppcmudepay ! mulawdec ! audioconvert ! audioresample ! pulsesink",
             True)
         self._pipeline.add(sink)
         sink.sync_state_with_parent()
