@@ -297,14 +297,19 @@ class AudioEngine(GObject.Object):
         self._webrtc = self._pipeline.get_by_name("webrtcbin")
 
         # Audio capture: pulsesrc → 8kHz mono → mulawenc → rtppcmupay → webrtcbin.
-        # rtppcmupay's payload type is 0 (the universal PCMU PT). The
-        # output caps tell webrtcbin to register a sendrecv audio
-        # transceiver carrying PCMU.
+        # rtppcmupay's pt property is 0 (the universal PCMU PT). The
+        # output already carries application/x-rtp,media=audio,
+        # encoding-name=PCMU caps which webrtcbin uses to register a
+        # sendrecv audio transceiver.
+        # NOTE: gst_parse_bin_from_description does NOT accept a
+        # trailing caps-filter string (unlike gst_parse_launch) — the
+        # bin parser wants a real element at the end so it can ghost
+        # the src pad. A trailing "application/x-rtp,..." gets parsed
+        # as a missing element. Don't add one back.
         mic = Gst.parse_bin_from_description(
             "pulsesrc ! audioconvert ! audioresample "
             "! audio/x-raw,rate=8000,channels=1 "
-            "! mulawenc ! rtppcmupay pt=0 "
-            "! application/x-rtp,media=audio,encoding-name=PCMU,payload=0,clock-rate=8000",
+            "! mulawenc ! rtppcmupay pt=0",
             True)
         self._pipeline.add(mic)
         if not mic.link(self._webrtc):
