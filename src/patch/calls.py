@@ -30,6 +30,7 @@ from gi.repository import GObject
 
 from patch import numfmt
 from patch.jingle_session import JingleSession
+from patch.ringer import Ringer
 from patch.xmpp import jingle as jingle_mod
 
 log = logging.getLogger(__name__)
@@ -99,6 +100,9 @@ class CallManager(GObject.Object):
         # For incoming calls we may receive the peer's session-initiate
         # before our user has tapped Accept. Stash it.
         self._pending_initiate: dict | None = None
+        # Ringtone driver — feedbackd on Phosh, GStreamer-synthesised
+        # ringback elsewhere. Singleton; start/stop is idempotent.
+        self._ringer = Ringer()
 
         self._xmpp.connect("jmi-event", self._on_jmi)
         self._xmpp.connect("jingle-iq", self._on_jingle_iq)
@@ -189,6 +193,9 @@ class CallManager(GObject.Object):
                 initial_state=STATE_RINGING)
             self._session = sess
             self._session_started_at = time.time()
+            # Start ringing immediately — _transition won't fire for the
+            # initial state, so the ringer needs explicit kick here.
+            self._ringer.start()
             self.emit("call-started", sess, "incoming")
             return
 
@@ -278,9 +285,16 @@ class CallManager(GObject.Object):
 
     def _transition(self, sess: CallSession, new_state: str) -> None:
         log.info("call %s -> %s", sess.session_id[:8], new_state)
+        prior = sess.state
         sess.state = new_state
+        # Ringtone control: ring while RINGING, silent everywhere else.
+        if new_state == STATE_RINGING and prior != STATE_RINGING:
+            self._ringer.start()
+        elif prior == STATE_RINGING and new_state != STATE_RINGING:
+            self._ringer.stop()
         self.emit("call-changed", sess)
         if sess.is_terminal:
+            self._ringer.stop()
             self._log_call(sess)
             self.emit("call-ended", sess)
             # Keep `_session` around briefly so the UI can read terminal

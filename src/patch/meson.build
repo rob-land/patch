@@ -29,6 +29,7 @@ python.install_sources(
     'message_persister.py',
     'notifications.py',
     'numfmt.py',
+    'ringer.py',
     'window.py',
   ),
   subdir: meson.project_name(),
