@@ -133,6 +133,10 @@ class PatchMessagesPage(Adw.Bin):
             row = Adw.ActionRow(
                 title=self._display_name_for(c["remote_jid"], gateway),
                 subtitle=_truncate(c.get("last_body") or ""),
+                # Adw.ActionRow defaults to non-activatable, which
+                # silently swallows row-activated. Without this, the
+                # only way into a thread is the notification tap.
+                activatable=True,
             )
             # Store the JID on the row so the activation handler knows
             # which conversation to open.

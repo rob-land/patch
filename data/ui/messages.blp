@@ -44,7 +44,13 @@ template $PatchMessagesPage: Adw.Bin {
       child: Adw.ToolbarView {
         [top]
         Adw.HeaderBar thread_header {
+          // The window's own HeaderBar carries the window controls
+          // (close/maximize/minimize). The thread page is nested inside
+          // an AdwNavigationView inside the main content area, so its
+          // header is a SECOND header from the user's perspective —
+          // suppress both title-button clusters here.
           show-start-title-buttons: false;
+          show-end-title-buttons: false;
           title-widget: Adw.WindowTitle thread_title {};
         }
 

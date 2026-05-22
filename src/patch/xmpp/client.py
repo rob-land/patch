@@ -251,13 +251,17 @@ class XmppClient(GObject.Object):
         log.info("logged in (stream active)")
         self._fail_count = 0
         self._cancel_reconnect()
-        # Send a bare presence so the server knows we're available and
-        # starts delivering carbons / push for us. Without this some
-        # servers hold messages in offline-store rather than forwarding
-        # to the live stream.
+        # Send a presence with high priority so the server routes
+        # type=chat messages to us preferentially over any stale
+        # patch.* resources still hibernated from prior cold-starts.
+        # Priority 5 is the cohort-conventional 'phone' priority —
+        # well above the default 0 that those hibernated sessions
+        # advertise.
         try:
             from nbxmpp.protocol import Presence
-            self._client.send_stanza(Presence())
+            pres = Presence()
+            pres.addChild("priority").addData("5")
+            self._client.send_stanza(pres)
         except Exception as exc:  # noqa: BLE001
             log.debug("initial presence failed: %s", exc)
         # Enable XEP-0280 Message Carbons so messages we send (or that

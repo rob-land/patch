@@ -73,16 +73,19 @@ class NotificationManager:
 
     def _on_open_conversation(self, _action, param):
         jid = param.get_string()
-        # Surface the window first so present() does something visible.
+        # Cold-start case: the notification fired from a service-mode
+        # instance with no window. Build one by activating the app —
+        # that triggers do_activate which constructs PatchWindow.
         win = self._window_provider()
-        if win is not None:
-            win.present()
-        # Then ask the app to route to the conversation — the messages
-        # page picks this up via a window-scoped action so it can switch
-        # to the right tab + push the thread page.
-        if win is not None:
-            win.activate_action(
-                "win.open-conversation", GLib.Variant("s", jid))
+        if win is None:
+            self._app.activate()
+            win = self._window_provider()
+        if win is None:
+            log.warning("could not build window for notification tap")
+            return
+        win.present()
+        win.activate_action(
+            "win.open-conversation", GLib.Variant("s", jid))
 
     # -- helpers ---------------------------------------------------------
 
