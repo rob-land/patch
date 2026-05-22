@@ -72,6 +72,11 @@ class JingleSession(GObject.Object):
         except Exception as exc:  # noqa: BLE001
             log.warning("could not translate SDP to Jingle: %s", exc)
             return
+        self._local_ice_ufrag  = kw.get("ice_ufrag", "")
+        self._local_ice_pwd    = kw.get("ice_pwd", "")
+        self._local_dtls_fp    = kw.get("dtls_fingerprint", "")
+        self._local_dtls_hash  = kw.get("dtls_hash", "sha-256")
+        self._local_dtls_setup = kw.get("dtls_setup", "")
         iq = jingle_mod.session_initiate(
             to_jid=self.peer_jid,
             initiator=self.own_jid,
@@ -109,6 +114,13 @@ class JingleSession(GObject.Object):
         except Exception as exc:  # noqa: BLE001
             log.warning("could not translate SDP to Jingle: %s", exc)
             return
+        # Cache for transport-info enrichment — cheogram requires
+        # ufrag/pwd/fingerprint on every trickled <transport>.
+        self._local_ice_ufrag  = kw.get("ice_ufrag", "")
+        self._local_ice_pwd    = kw.get("ice_pwd", "")
+        self._local_dtls_fp    = kw.get("dtls_fingerprint", "")
+        self._local_dtls_hash  = kw.get("dtls_hash", "sha-256")
+        self._local_dtls_setup = kw.get("dtls_setup", "")
         iq = jingle_mod.session_accept(
             to_jid=self.peer_jid,
             responder=self.own_jid,
@@ -177,8 +189,16 @@ class JingleSession(GObject.Object):
         cand = jingle_mod.sdp_candidate_to_jingle(sdp_line)
         if cand is None:
             return
+        # Trickled candidates MUST carry the same ufrag/pwd (and
+        # ideally the fingerprint) as our session-initiate / session-
+        # accept's transport — otherwise the peer drops them.
         iq = jingle_mod.transport_info(
-            to_jid=self.peer_jid, sid=self.sid, candidates=[cand])
+            to_jid=self.peer_jid, sid=self.sid, candidates=[cand],
+            ice_ufrag=getattr(self, "_local_ice_ufrag", ""),
+            ice_pwd=getattr(self, "_local_ice_pwd", ""),
+            dtls_fp=getattr(self, "_local_dtls_fp", ""),
+            dtls_hash=getattr(self, "_local_dtls_hash", "sha-256"),
+            dtls_setup=getattr(self, "_local_dtls_setup", ""))
         self._xmpp.send_iq(iq)
 
     # -- engine lifecycle (TURN-aware) ---------------------------------

@@ -141,6 +141,18 @@ class XmppClient(GObject.Object):
         client.subscribe("login-successful",  self._on_login_successful)
         client.subscribe("stanza-received",   self._on_stanza_received)
 
+        # Register a real dispatcher handler for jingle iqs — listening
+        # to 'stanza-received' alone is NOT enough, because nbxmpp's
+        # dispatcher follows up the unhandled-iq chain with
+        # _default_handler which sends <feature-not-implemented/>. The
+        # peer sees that and gives up. By raising NodeProcessed inside
+        # this handler we suppress the default reply.
+        from nbxmpp.structs import StanzaHandler
+        from patch.xmpp.jingle import NS_JINGLE
+        client.register_handler(StanzaHandler(
+            name="iq", callback=self._on_jingle_iq_handler,
+            typ="set", ns=NS_JINGLE))
+
         self._client = client
         self._account.set_state(account_mod.STATE_CONNECTING)
         log.info("connecting %s -> %s", self._account.jid, jid.domain)
@@ -315,20 +327,31 @@ class XmppClient(GObject.Object):
         self.emit("state-changed", account_mod.STATE_FAILED)
         self._schedule_reconnect()
 
+    def _on_jingle_iq_handler(self, _client, stanza, _properties):
+        """Dispatcher-registered handler for `<iq type=set><jingle>`.
+
+        Listening only to the stanza-received signal isn't enough — the
+        dispatcher follows the handler chain with a default handler
+        that replies <feature-not-implemented/> if nothing claimed the
+        iq. That confuses cheogram and ICE never converges. By raising
+        NodeProcessed here we tell the dispatcher the iq is handled.
+        """
+        from nbxmpp.dispatcher import NodeProcessed
+        jingle = jingle_mod.parse_jingle(stanza)
+        if jingle is None:
+            return
+        from_jid = stanza.getAttr("from") or ""
+        iq_id = stanza.getAttr("id") or ""
+        log.info("jingle %s sid=%s from=%s",
+                 jingle.get("action"), jingle.get("sid"), from_jid)
+        self.emit("jingle-iq", jingle, from_jid, iq_id)
+        # ACK and tell the dispatcher we're done so it doesn't fire
+        # the feature-not-implemented default reply.
+        self._send_iq_result(stanza)
+        raise NodeProcessed
+
     def _on_stanza_received(self, _client, _signal_name, stanza):
         name = stanza.getName()
-        if name == "iq" and stanza.getAttr("type") == "set":
-            jingle = jingle_mod.parse_jingle(stanza)
-            if jingle is not None:
-                from_jid = stanza.getAttr("from") or ""
-                iq_id = stanza.getAttr("id") or ""
-                log.info("jingle %s sid=%s from=%s",
-                         jingle.get("action"), jingle.get("sid"), from_jid)
-                self.emit("jingle-iq", jingle, from_jid, iq_id)
-                # ACK the iq immediately; the session logic handles the
-                # actual state transition out of band.
-                self._send_iq_result(stanza)
-                return
         # We only handle <message> here. Presence, IQ, etc. flow into
         # nbxmpp's internal dispatcher modules and we can hook those
         # separately if needed.

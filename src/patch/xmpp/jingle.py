@@ -79,8 +79,19 @@ def transport_info(
     *, to_jid: str, sid: str,
     candidates: list[dict],
     content_name: str = "audio",
+    ice_ufrag: str = "",
+    ice_pwd: str = "",
+    dtls_fp: str = "",
+    dtls_hash: str = "sha-256",
+    dtls_setup: str = "",
 ) -> Iq:
     """Trickle-ICE candidate update.
+
+    The <transport> element must carry the same ufrag/pwd (and
+    fingerprint) as our session-accept's transport — otherwise the
+    peer can't pair our trickled candidates with the in-flight
+    session. Cheogram requires this; without it the candidates are
+    silently dropped and ICE never converges.
 
     Each `candidates` entry is a dict like:
         {component, foundation, ip, port, priority, protocol, type,
@@ -93,8 +104,19 @@ def transport_info(
     content = jingle.addChild("content", attrs={
         "creator": "initiator", "name": content_name,
     })
+    transport_attrs = {}
+    if ice_ufrag:
+        transport_attrs["ufrag"] = ice_ufrag
+    if ice_pwd:
+        transport_attrs["pwd"] = ice_pwd
     transport = content.addChild(
-        "transport", namespace=NS_ICE_UDP, attrs={})
+        "transport", namespace=NS_ICE_UDP, attrs=transport_attrs)
+    if dtls_fp:
+        fp = transport.addChild(
+            "fingerprint", namespace=NS_DTLS, attrs={"hash": dtls_hash})
+        if dtls_setup:
+            fp.setAttr("setup", dtls_setup)
+        fp.setData(dtls_fp)
     for cand in candidates:
         transport.addChild("candidate", attrs={k: str(v) for k, v in cand.items()})
     return iq
