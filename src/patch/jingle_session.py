@@ -65,8 +65,8 @@ class JingleSession(GObject.Object):
             self._send_session_initiate))
 
     def _send_session_initiate(self, sdp_text: str) -> None:
-        log.info("local offer SDP ready (%d bytes)", len(sdp_text))
-        log.debug("offer SDP:\n%s", sdp_text)
+        log.info("local offer SDP ready (%d bytes):\n%s",
+                 len(sdp_text), sdp_text)
         try:
             kw = sdp_to_jingle_description(sdp_text)
         except Exception as exc:  # noqa: BLE001
@@ -97,7 +97,7 @@ class JingleSession(GObject.Object):
             return
         content = contents[0]
         sdp = jingle_content_to_sdp(content, role="offer")
-        log.debug("remote offer translated SDP:\n%s", sdp)
+        log.info("remote offer translated SDP (%d bytes):\n%s", len(sdp), sdp)
         self.engine.set_remote_description(sdp, sdp_type="offer")
         self._remote_desc_set = True
         # Flush any candidates that arrived before the description.
@@ -107,8 +107,8 @@ class JingleSession(GObject.Object):
         self.engine.create_answer(self._send_session_accept)
 
     def _send_session_accept(self, sdp_text: str) -> None:
-        log.info("local answer SDP ready (%d bytes)", len(sdp_text))
-        log.debug("answer SDP:\n%s", sdp_text)
+        log.info("local answer SDP ready (%d bytes):\n%s",
+                 len(sdp_text), sdp_text)
         try:
             kw = sdp_to_jingle_description(sdp_text)
         except Exception as exc:  # noqa: BLE001

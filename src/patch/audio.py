@@ -429,7 +429,45 @@ class AudioEngine(GObject.Object):
     def _on_ice_state_change(self, *_):
         state = self._webrtc.get_property("ice-connection-state")
         log.info("ice connection state -> %s", state.value_nick)
+        if state.value_nick == "failed":
+            self._dump_ice_stats()
         self.emit("ice-state-change", int(state))
+
+    def _dump_ice_stats(self) -> None:
+        """Pull webrtcbin's stats so we can see WHY ICE failed.
+
+        Logs every local-candidate, remote-candidate, and candidate-
+        pair entry — these include selected pair, state (succeeded /
+        failed / in-progress), and the IP/port the agent was checking.
+        """
+        try:
+            promise = Gst.Promise.new_with_change_func(
+                self._on_stats_ready, None, None)
+            self._webrtc.emit("get-stats", None, promise)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("get-stats failed: %s", exc)
+
+    def _on_stats_ready(self, promise, *_):
+        try:
+            stats = promise.get_reply()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("stats reply unavailable: %s", exc)
+            return
+        if stats is None:
+            log.info("ice stats: <empty>")
+            return
+        # Stats is a GstStructure; iterate fields. Each field is itself
+        # a structure describing a stats entry (candidate, pair, etc.).
+        n = stats.n_fields()
+        log.info("ice stats: %d entries", n)
+        for i in range(n):
+            name = stats.nth_field_name(i)
+            sub  = stats.get_value(name)
+            if not hasattr(sub, "to_string"):
+                continue
+            kind = sub.get_name() if hasattr(sub, "get_name") else "?"
+            if "candidate" in kind or "pair" in kind or "ice" in kind:
+                log.info("  %s: %s", kind, sub.to_string())
 
     def _on_state_notify(self, _bin, pspec):
         try:
