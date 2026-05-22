@@ -110,10 +110,18 @@ class XmppClient(GObject.Object):
             self._account.set_state(account_mod.STATE_FAILED, f"Invalid JID: {exc}")
             return
 
+        # Unique resource per process: cold-start activations would
+        # otherwise conflict-replace the previous still-hibernated
+        # `patch` resource and evict its queued messages before we have
+        # a chance to receive them. A random suffix keeps each launch
+        # cleanly independent; carbons + MAM cover the cross-resource
+        # delivery we still want.
+        import os
+        resource = f"patch.{os.urandom(4).hex()}"
         client = NbxClient(log_context="patch")
         client.set_domain(jid.domain)
         client.set_username(jid.localpart)
-        client.set_resource("patch")
+        client.set_resource(resource)
         client.set_password(password)
         client.set_ignore_tls_errors(False)
         # Prefer direct TLS (5223) — chat.rob.land advertises both _xmpps

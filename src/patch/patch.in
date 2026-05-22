@@ -15,7 +15,14 @@ gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 gi.require_version('Secret', '1')
 gi.require_version('Soup', '3.0')
-gi.require_version('Folks', '0.7')
+# Folks is optional — sandbox runtimes that don't ship the libfolks
+# typelib (the Flatpak GNOME runtime, for one) still get a working
+# app, just without contact-name resolution. ContactsManager has its
+# own try/except around the IndividualAggregator import below.
+try:
+    gi.require_version('Folks', '0.7')
+except ValueError:
+    pass
 from gi.repository import Gio
 
 resource_path = os.path.join(pkgdatadir, '@APP_ID@.gresource')

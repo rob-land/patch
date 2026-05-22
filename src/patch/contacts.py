@@ -20,11 +20,21 @@ from __future__ import annotations
 
 import logging
 
-from gi.repository import Folks, GLib, GObject
+from gi.repository import GLib, GObject
 
 from patch import numfmt
 
 log = logging.getLogger(__name__)
+
+
+# Folks may not be present in the Flatpak runtime (the GNOME Platform
+# image doesn't include libfolks). Make the import optional so the rest
+# of the app survives — ContactsManager will log a warning at start()
+# and lookup() will always return None, falling back to numfmt rendering.
+try:
+    from gi.repository import Folks
+except (ImportError, ValueError):
+    Folks = None
 
 
 class ContactsManager(GObject.Object):
@@ -44,6 +54,9 @@ class ContactsManager(GObject.Object):
 
     def start(self) -> None:
         """Kick off the Folks aggregator. Safe to call once at startup."""
+        if Folks is None:
+            log.info("folks typelib not present — contacts lookup disabled")
+            return
         try:
             self._aggregator = Folks.IndividualAggregator.dup()
         except Exception as exc:  # noqa: BLE001

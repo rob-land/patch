@@ -316,14 +316,13 @@ class PatchMessagesPage(Adw.Bin):
 
     def _on_message_received(self, _xmpp, remote_jid, body, incoming, timestamp,
                              attachment_url):
-        # Group SMS bodies on JMP carry the sender in the body itself; split
-        # that out so we can render it as a separate row label.
+        # The MessagePersister (app-level, always alive) writes to the
+        # store regardless of whether this page exists. Here we only do
+        # view-side work — split the group-SMS body so the thread row
+        # renders the inline sender, and refresh the conversation list.
         sender_jid = None
         if numfmt.is_group_jid(remote_jid):
             sender_jid, body = numfmt.parse_group_body(body)
-        self._store.add_message(
-            remote_jid, bool(incoming), body, timestamp, sender_jid,
-            attachment_url=attachment_url or None)
         if self._open_jid == remote_jid:
             # Append directly to the visible thread without a full refetch.
             msg = {

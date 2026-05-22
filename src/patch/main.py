@@ -14,6 +14,7 @@ from patch.dialogs.account_dialog import PatchAccountDialog
 from patch.dialogs.call_dialog import PatchCallDialog
 from patch.dialogs.preferences_dialog import PatchPreferencesDialog
 from patch.logging_setup import configure_logging
+from patch.message_persister import MessagePersister
 from patch.notifications import NotificationManager
 from patch.push.controller import PushController
 from patch.store.db import MessageStore
@@ -39,6 +40,11 @@ class PatchApplication(Adw.Application):
         self._account       = Account()
         self._store         = MessageStore()
         self._xmpp          = XmppClient(self._account, store=self._store)
+        # Persist every inbound (and locally-echoed outbound) message to
+        # SQLite. Lives on the Application so cold-start push activations
+        # — where no window or messages page exists yet — still write to
+        # the store. The messages page does view-only work.
+        self._persister     = MessagePersister(self._xmpp, self._store)
         self._contacts      = ContactsManager(self._account)
         self._calls         = CallManager(self._account, self._xmpp,
                                           contacts=self._contacts,

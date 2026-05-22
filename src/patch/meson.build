@@ -24,6 +24,7 @@ python.install_sources(
     'contacts.py',
     'logging_setup.py',
     'main.py',
+    'message_persister.py',
     'notifications.py',
     'numfmt.py',
     'window.py',

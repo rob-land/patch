@@ -102,6 +102,28 @@ class PushController(GObject.Object):
         # already connected and this is a no-op; for cold-start we just
         # came up and need to actually log in.
         self._xmpp.connect_to_server()
+        # Hold the application open long enough for the XMPP stream to
+        # come up, flush the queued message, and fire the user-facing
+        # notification. Without this, --gapplication-service can exit
+        # before the message arrives over the wire.
+        self._hold_briefly()
+
+    def _hold_briefly(self) -> None:
+        app = Gio.Application.get_default()
+        if app is None:
+            return
+        app.hold()
+        log.debug("hold() for push wake window")
+        def _release():
+            try:
+                app.release()
+                log.debug("release() after push wake window")
+            except Exception:  # noqa: BLE001
+                pass
+            return False
+        # 90s buys plenty of room for XMPP login + offline-store flush
+        # + the user reading the notification before the app idles out.
+        GLib.timeout_add_seconds(90, _release)
 
     def _on_unregistered(self, _connector):
         # The distributor revoked us. Clear the endpoint so we know to
