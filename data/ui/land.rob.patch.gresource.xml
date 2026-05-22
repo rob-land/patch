@@ -9,5 +9,7 @@
     <file preprocess="xml-stripblanks" alias="ui/account-dialog.ui">account-dialog.ui</file>
     <file preprocess="xml-stripblanks" alias="ui/call-dialog.ui">call-dialog.ui</file>
     <file preprocess="xml-stripblanks" alias="ui/preferences-dialog.ui">preferences-dialog.ui</file>
+    <file preprocess="xml-stripblanks" alias="ui/new-message-dialog.ui">new-message-dialog.ui</file>
+    <file alias="ui/style.css">style.css</file>
   </gresource>
 </gresources>

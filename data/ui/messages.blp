@@ -8,31 +8,48 @@ template $PatchMessagesPage: Adw.Bin {
       tag: "list";
 
       child: Adw.ToolbarView {
-        content: Gtk.Stack messages_stack {
-          transition-type: crossfade;
-
-          Gtk.StackPage {
-            name: "empty";
-
-            child: Adw.StatusPage {
-              icon-name: "user-available-symbolic";
-              title: _("No messages yet");
-              description: _("SMS conversations will appear here once your JMP\naccount is configured and the first message arrives.");
-            };
+        content: Gtk.Overlay {
+          // Floating action button — bottom-right, opens a number-entry
+          // dialog so the user can start a fresh conversation. Using
+          // an overlay rather than a per-page header keeps the window's
+          // own header bar as the only chrome up top.
+          [overlay]
+          Gtk.Button new_message_button {
+            icon-name: "document-edit-symbolic";
+            tooltip-text: _("New conversation");
+            halign: end;
+            valign: end;
+            margin-end: 16;
+            margin-bottom: 16;
+            styles ["circular", "suggested-action", "osd"]
           }
 
-          Gtk.StackPage {
-            name: "list";
+          child: Gtk.Stack messages_stack {
+            transition-type: crossfade;
 
-            child: Gtk.ScrolledWindow {
-              hscrollbar-policy: never;
+            Gtk.StackPage {
+              name: "empty";
 
-              child: Gtk.ListBox conversations_list {
-                selection-mode: single;
-                styles ["navigation-sidebar"]
+              child: Adw.StatusPage {
+                icon-name: "user-available-symbolic";
+                title: _("No messages yet");
+                description: _("SMS conversations will appear here once your JMP\naccount is configured and the first message arrives.");
               };
-            };
-          }
+            }
+
+            Gtk.StackPage {
+              name: "list";
+
+              child: Gtk.ScrolledWindow {
+                hscrollbar-policy: never;
+
+                child: Gtk.ListBox conversations_list {
+                  selection-mode: single;
+                  styles ["navigation-sidebar"]
+                };
+              };
+            }
+          };
         };
       };
     }

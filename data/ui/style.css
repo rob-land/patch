@@ -1,0 +1,43 @@
+/*
+ * Patch — application styles
+ *
+ * Conversation thread bubbles. We don't restyle Adwaita widgets here;
+ * everything lives behind dedicated CSS classes added in
+ * pages/messages._render_thread_row.
+ */
+
+/* Outer bubble container — both inbound and outbound. */
+.patch-bubble {
+    padding: 10px 12px;
+    border-radius: 16px;
+    min-width: 60px;
+    /* Bubble width is bounded by the child Gtk.Label's max_width_chars
+       (set in pages/messages._render_thread_row); Gtk CSS doesn't have
+       a max-width property. */
+}
+
+.patch-bubble-incoming {
+    background: alpha(@accent_bg_color, 0.18);
+    color:      @window_fg_color;
+    border-bottom-left-radius: 4px;     /* "speech tail" toward the sender */
+}
+
+.patch-bubble-outgoing {
+    background: @accent_bg_color;
+    color:      @accent_fg_color;
+    border-bottom-right-radius: 4px;
+}
+
+/* Inline image attachments inside a bubble — keep them within the
+   bubble's max-width and rounded to match. */
+.patch-bubble picture {
+    border-radius: 12px;
+    margin-bottom: 4px;
+}
+
+/* Conversation list rows are AdwActionRows; let them keep their
+   default styling but bump the title weight so unread threads read
+   more confidently than read ones. */
+.patch-conv-unread .title {
+    font-weight: 700;
+}

@@ -50,6 +50,7 @@ python.install_sources(
     'dialogs/__init__.py',
     'dialogs/account_dialog.py',
     'dialogs/call_dialog.py',
+    'dialogs/new_message_dialog.py',
     'dialogs/preferences_dialog.py',
   ),
   subdir: meson.project_name() / 'dialogs',

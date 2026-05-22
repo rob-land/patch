@@ -42,6 +42,7 @@ class PatchMessagesPage(Adw.Bin):
     compose_entry:     Gtk.Entry          = Gtk.Template.Child()
     send_button:       Gtk.Button         = Gtk.Template.Child()
     attach_button:     Gtk.Button         = Gtk.Template.Child()
+    new_message_button: Gtk.Button        = Gtk.Template.Child()
 
     def __init__(self, account, store, xmpp, contacts=None):
         super().__init__()
@@ -60,6 +61,7 @@ class PatchMessagesPage(Adw.Bin):
         self.compose_entry.connect("activate", self._on_compose_activate)
         self.send_button.connect("clicked", self._on_compose_activate)
         self.attach_button.connect("clicked", self._on_attach_clicked)
+        self.new_message_button.connect("clicked", self._on_new_message_clicked)
 
         actions = Gio.SimpleActionGroup()
         send_action = Gio.SimpleAction.new("send-message", None)
@@ -192,6 +194,19 @@ class PatchMessagesPage(Adw.Bin):
                 "win.toast", GLib.Variant("s", "Send failed"))
             return
         self.compose_entry.set_text("")
+
+    # -- new-conversation flow ------------------------------------------
+
+    def _on_new_message_clicked(self, *_):
+        # Lazy import to keep page-init cheap and avoid a circular
+        # at module-load time (the dialog imports nothing back into us
+        # but still — keep the pages directory cheap to enter).
+        from patch.dialogs.new_message_dialog import PatchNewMessageDialog
+        window = self.get_root() if isinstance(self.get_root(), Gtk.Window) else None
+        if window is None:
+            return
+        dialog = PatchNewMessageDialog(self._account, window)
+        dialog.present(window)
 
     # -- outbound attach -------------------------------------------------
 
@@ -394,7 +409,9 @@ def _render_thread_row(msg: dict) -> Gtk.Widget:
     bubble_box.set_margin_end(12)
     bubble_box.set_margin_top(4)
     bubble_box.set_margin_bottom(4)
-    bubble_box.add_css_class("card")
+    bubble_box.add_css_class("patch-bubble")
+    bubble_box.add_css_class(
+        "patch-bubble-incoming" if msg["incoming"] else "patch-bubble-outgoing")
 
     # If there's an image attachment, render the picture above the body
     # text. Loading is async via Soup3 — the placeholder shows the URL

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from gi.repository import Adw, Gio, GLib, Gtk
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from patch import APP_ID
 from patch import account as account_mod
@@ -11,6 +11,23 @@ from patch.pages.messages  import PatchMessagesPage
 from patch.pages.voicemail import PatchVoicemailPage
 
 log = logging.getLogger(__name__)
+
+
+_css_loaded = False
+
+
+def _ensure_css_loaded() -> None:
+    global _css_loaded
+    if _css_loaded:
+        return
+    display = Gdk.Display.get_default()
+    if display is None:
+        return
+    provider = Gtk.CssProvider()
+    provider.load_from_resource("/land/rob/patch/ui/style.css")
+    Gtk.StyleContext.add_provider_for_display(
+        display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    _css_loaded = True
 
 
 @Gtk.Template(resource_path="/land/rob/patch/ui/window.ui")
@@ -50,6 +67,9 @@ class PatchWindow(Adw.ApplicationWindow):
         help_action = Gio.SimpleAction.new("show-help-overlay", None)
         help_action.connect("activate", self._show_help_overlay)
         self.add_action(help_action)
+
+        # Application-wide CSS (loaded once for the default display).
+        _ensure_css_loaded()
 
         # Window-scoped action that any child page can fire to surface a
         # toast. Used by the dialer for "invalid number" etc.
