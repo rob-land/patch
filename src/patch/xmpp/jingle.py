@@ -138,6 +138,13 @@ def _add_audio_content(jingle, payload_types,
         pt_el = desc.addChild("payload-type", attrs=attrs)
         for pname, pval in (pt.get("parameters") or {}).items():
             pt_el.addChild("parameter", attrs={"name": pname, "value": str(pval)})
+    # XEP-0167 §13: <rtcp-mux/> tells the peer we share one ICE
+    # component for RTP and RTCP. webrtcbin always rtcp-muxes, so we
+    # always advertise it. Without it, cheogram allocates component=2
+    # ICE candidates for RTCP and waits for connectivity checks on
+    # that component too — which fail because we don't have one, and
+    # the call drops 5-7 seconds later.
+    desc.addChild("rtcp-mux", namespace=NS_RTP)
 
     transport = content.addChild("transport", namespace=NS_ICE_UDP,
                                  attrs={"ufrag": ice_ufrag, "pwd": ice_pwd})
