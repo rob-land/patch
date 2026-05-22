@@ -304,24 +304,58 @@ class AudioEngine(GObject.Object):
         self._pipeline = Gst.Pipeline.new("call-pipeline")
         self._pipeline.add(self._webrtc)
 
-        # Audio capture: pulsesrc → 8kHz mono → mulawenc → rtppcmupay → webrtcbin.
-        # rtppcmupay's pt property is 0 (the universal PCMU PT). The
-        # output already carries application/x-rtp,media=audio,
-        # encoding-name=PCMU caps which webrtcbin uses to register a
-        # sendrecv audio transceiver.
-        # NOTE: gst_parse_bin_from_description does NOT accept a
-        # trailing caps-filter string (unlike gst_parse_launch) — the
-        # bin parser wants a real element at the end so it can ghost
-        # the src pad. A trailing "application/x-rtp,..." gets parsed
-        # as a missing element. Don't add one back.
-        mic = Gst.parse_bin_from_description(
-            "pulsesrc ! audioconvert ! audioresample "
-            "! audio/x-raw,rate=8000,channels=1 "
-            "! mulawenc ! rtppcmupay pt=0",
-            True)
-        self._pipeline.add(mic)
-        if not mic.link(self._webrtc):
-            log.warning("failed to link mic into webrtcbin")
+        # Audio capture chain — built as individual elements directly
+        # on the main pipeline (NOT inside a sub-bin). Earlier we used
+        # parse_bin_from_description for the mic chain; that worked for
+        # element instantiation but a sub-bin's segment / live-clock
+        # events don't propagate cleanly across the bin boundary into
+        # webrtcbin. rtpsession then complained:
+        #     "running time not set, can not create SR for SSRC ..."
+        #     "generated empty RTCP messages for all the sources"
+        # and no outbound RTP ever shipped (inbound worked fine because
+        # webrtcbin's own internal pipeline is unaffected). Building the
+        # chain flat fixes that — pulsesrc's clock is elected as the
+        # pipeline clock and PTSes flow straight through.
+        def _make(factory, name=None, **props):
+            el = Gst.ElementFactory.make(factory, name)
+            if el is None:
+                raise RuntimeError(f"missing GStreamer element: {factory}")
+            for k, v in props.items():
+                el.set_property(k.replace("_", "-"), v)
+            self._pipeline.add(el)
+            return el
+
+        try:
+            src      = _make("pulsesrc",     "mic_src", is_live=True)
+            convert  = _make("audioconvert", "mic_conv")
+            resample = _make("audioresample","mic_res")
+            capsf    = _make("capsfilter",   "mic_caps",
+                             caps=Gst.Caps.from_string(
+                                 "audio/x-raw,rate=8000,channels=1"))
+            encoder  = _make("mulawenc",     "mic_enc")
+            payloader = _make("rtppcmupay",  "mic_pay", pt=0)
+            outcaps  = _make("capsfilter",   "mic_outcaps",
+                             caps=Gst.Caps.from_string(
+                                 "application/x-rtp,media=audio,"
+                                 "encoding-name=PCMU,payload=0,"
+                                 "clock-rate=8000"))
+        except RuntimeError as exc:
+            log.warning("audio engine init: %s", exc)
+            return False
+
+        for a, b in ((src, convert), (convert, resample),
+                     (resample, capsf), (capsf, encoder),
+                     (encoder, payloader), (payloader, outcaps)):
+            if not a.link(b):
+                log.warning("failed to link %s -> %s",
+                            a.get_name(), b.get_name())
+                return False
+        # Link the final capsfilter's src pad into webrtcbin's request
+        # sink_%u pad. webrtcbin reads the caps and creates a sendrecv
+        # transceiver matching them.
+        if not outcaps.link(self._webrtc):
+            log.warning("failed to link mic chain into webrtcbin")
+            return False
         # Playback: pad-added → rtppcmudepay → mulawdec → pulsesink.
         self._webrtc.connect("pad-added", self._on_pad_added)
         self._webrtc.connect("on-ice-candidate", self._on_ice_candidate)
@@ -436,13 +470,27 @@ class AudioEngine(GObject.Object):
                  pad.get_name(), direction, caps_str)
         if pad.get_direction() != Gst.PadDirection.SRC:
             return
-        sink = Gst.parse_bin_from_description(
-            "rtppcmudepay ! mulawdec ! audioconvert ! audioresample ! pulsesink",
-            True)
-        self._pipeline.add(sink)
-        sink.sync_state_with_parent()
-        result = pad.link(sink.get_static_pad("sink"))
-        log.info("playback bin linked: %s", result.value_nick)
+        # Build playback chain as flat elements (same reason as the mic
+        # chain — no sub-bin so segments propagate cleanly).
+        depay   = Gst.ElementFactory.make("rtppcmudepay", "pb_depay")
+        decoder = Gst.ElementFactory.make("mulawdec",     "pb_dec")
+        convert = Gst.ElementFactory.make("audioconvert", "pb_conv")
+        resample = Gst.ElementFactory.make("audioresample","pb_res")
+        sink    = Gst.ElementFactory.make("pulsesink",    "pb_sink")
+        for el in (depay, decoder, convert, resample, sink):
+            if el is None:
+                log.warning("playback element missing — no inbound audio")
+                return
+            self._pipeline.add(el)
+            el.sync_state_with_parent()
+        for a, b in ((depay, decoder), (decoder, convert),
+                     (convert, resample), (resample, sink)):
+            if not a.link(b):
+                log.warning("playback link failed: %s -> %s",
+                            a.get_name(), b.get_name())
+                return
+        result = pad.link(depay.get_static_pad("sink"))
+        log.info("playback chain linked: %s", result.value_nick)
 
     def _on_ice_candidate(self, _bin, mline_index: int, candidate: str):
         log.debug("ice candidate (m=%d): %s", mline_index, candidate)
