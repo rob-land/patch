@@ -324,8 +324,25 @@ class AudioEngine(GObject.Object):
         # Playback: pad-added → rtppcmudepay → mulawdec → pulsesink.
         self._webrtc.connect("pad-added", self._on_pad_added)
         self._webrtc.connect("on-ice-candidate", self._on_ice_candidate)
+        # All three webrtcbin state machines are worth watching when
+        # debugging "audio doesn't connect": ICE (host candidates +
+        # connectivity checks), PeerConnection (the overall negotiation),
+        # and Signaling (offer/answer exchange).
         self._webrtc.connect("notify::ice-connection-state",
                              self._on_ice_state_change)
+        self._webrtc.connect("notify::ice-gathering-state",
+                             self._on_state_notify)
+        self._webrtc.connect("notify::connection-state",
+                             self._on_state_notify)
+        self._webrtc.connect("notify::signaling-state",
+                             self._on_state_notify)
+
+        # Pipe GStreamer bus messages (errors / warnings / EOS) into the
+        # Python log so a failed mic source or RTP issue doesn't die
+        # silently inside the pipeline.
+        bus = self._pipeline.get_bus()
+        bus.add_signal_watch()
+        bus.connect("message", self._on_bus_message)
 
         ret = self._pipeline.set_state(Gst.State.PLAYING)
         log.info("audio engine started (%s, gst state=%s)",
@@ -413,6 +430,29 @@ class AudioEngine(GObject.Object):
         state = self._webrtc.get_property("ice-connection-state")
         log.info("ice connection state -> %s", state.value_nick)
         self.emit("ice-state-change", int(state))
+
+    def _on_state_notify(self, _bin, pspec):
+        try:
+            state = self._webrtc.get_property(pspec.name)
+            nick = state.value_nick if hasattr(state, "value_nick") else state
+        except Exception as exc:  # noqa: BLE001
+            nick = f"<unknown: {exc}>"
+        log.info("webrtc %s -> %s", pspec.name, nick)
+
+    def _on_bus_message(self, _bus, msg):
+        t = msg.type
+        if t == Gst.MessageType.ERROR:
+            err, debug = msg.parse_error()
+            log.warning("gst error from %s: %s (%s)",
+                        msg.src.get_name() if msg.src else "?",
+                        err.message, debug)
+        elif t == Gst.MessageType.WARNING:
+            err, debug = msg.parse_warning()
+            log.info("gst warning from %s: %s (%s)",
+                     msg.src.get_name() if msg.src else "?",
+                     err.message, debug)
+        elif t == Gst.MessageType.EOS:
+            log.info("gst eos")
 
     def _parse_sdp(self, sdp_text: str) -> GstSdp.SDPMessage | None:
         result, sdp = GstSdp.SDPMessage.new()

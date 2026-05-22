@@ -33,21 +33,34 @@ App ID: `land.rob.patch`. License: GPL-3.0-or-later.
   cold in ~11s.
 - **Phase 3** ✅ Outgoing calls — XEP-0353 JMI propose/proceed/accept/
   reject/retract through `xmpp/client.py`, in-process `CallSession`
-  state machine + `Adw.Dialog` call screen. Audio is unwired (no
-  Jingle session-initiate yet) — needs xmpp-vala or equivalent.
-- **Phase 4** Incoming Jingle audio — not started.
-- **Phase 5** ✅ Outgoing calls (signalling only — audio side as above).
+  state machine + `Adw.Dialog` call screen. Live-tested end-to-end
+  against JMP: propose → proceed/accept (XEP-0353 targets per §6.2) →
+  active.
+- **Phase 4** Incoming Jingle audio — signalling layer ✅, media path
+  scaffolded. `src/patch/xmpp/jingle.py` builds + parses the XEP-0166/
+  0167/0176/0320 stanzas; `src/patch/jingle_session.py` orchestrates
+  one in-flight session; `src/patch/audio.py` drives webrtcbin with
+  PCMU (G.711 µ-law, 8 kHz mono — cheogram offers no Opus). Live
+  test 2026-05-22 confirmed the gateway accepts our session-accept
+  and trickles ICE candidates back; **ICE never converged so no
+  actual audio flowed before the peer terminated at ~20s**. Likely
+  webrtcbin ↔ cheogram DTLS-SRTP interop or flatpak-sandbox NAT
+  traversal — next iteration needs the new ICE/connection/signaling
+  state logs (added 2026-05-22) to pinpoint.
+- **Phase 5** ✅ Outgoing calls — JMI propose; if/when audio flows
+  it'll use the same engine path as Phase 4.
 - **Phase 6** ✅ MMS — inbound XEP-0066 OOB image rendering inline in
   the conversation, outbound attach button → XEP-0363 HTTP upload →
   PUT → send with OOB.
 - **Phase 7** ✅ Voicemail — `recent_voicemails()` filter on audio
   extensions, `Adw.ExpanderRow` per voicemail with `Gtk.MediaControls`
   inline streaming via `Gtk.MediaFile.new_for_file(uri)`.
-- **Phase 8** Polish — partial. Recent-calls list in dialer, libfolks
-  contact-name resolution, persisted call log, status banner. Still
-  TODO: real app icon, proper Preferences dialog (currently aliased
-  to Account), DTMF, ringer integration via libfeedback, MAM
-  pagination fix.
+- **Phase 8** Polish — recent-calls list, libfolks contact resolution,
+  persisted call log, status banner, real app icon, real Preferences
+  dialog, ringer (feedbackd primary + GStreamer fallback), call
+  duration timer, progressive dialer formatting, CSS message bubbles,
+  compose-new dialog. Still TODO: DTMF during active call (XEP-0181 /
+  RFC 4733 out-of-band events), MAM pagination fix.
 
 ## Sibling pieces
 
