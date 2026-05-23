@@ -334,8 +334,11 @@ class CallManager(GObject.Object):
             log.warning("could not log call: %s", exc)
 
     def _label_for(self, jid: str) -> str:
+        # Delegate to contacts.label_for_jid which handles group JIDs
+        # too. Falls back to bare JID if no contacts manager.
+        if self._contacts is not None:
+            return self._contacts.label_for_jid(jid)
         number = numfmt.jid_to_number(jid, self._account.gateway)
         if number:
-            name = self._contacts.lookup(number) if self._contacts else None
-            return name or numfmt.format_for_display(number)
+            return numfmt.format_for_display(number)
         return jid

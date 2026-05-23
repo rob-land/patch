@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Patch contacts. Copy or edit this file to:",
+    "  Flatpak:  ~/.var/app/land.rob.patch/config/patch/contacts.json",
+    "  Source:   ~/.config/patch/contacts.json",
+    "Patch will pick up changes on next start.",
+    "",
+    "Format: a flat JSON object. Pairs can run either way —",
+    "  \"name\": \"number\"   (most natural — like a phonebook)",
+    "  \"number\": \"name\"   (also accepted)",
+    "Numbers are normalised to E.164 with US as the default country, so",
+    "'713-555-1234' and '7135551234' both resolve to '+17135551234',",
+    "which is the form cheogram uses on the wire.",
+    "",
+    "Folks (libfolks) is the long-term plan — when it lands in the GNOME",
+    "Platform flatpak, the system address book overlays on top of this",
+    "file. Until then, this is the source of truth for caller-ID names",
+    "in the call dialog, conversation list, recents, voicemail, and",
+    "group-message sender labels.",
+    "",
+    "Remove this _comment field in your own file — only string-to-string",
+    "pairs are interpreted as contacts."
+  ],
+
+  "Alice Example": "713-555-1234",
+  "Bob Example":   "+18325551234",
+  "Carol":         "(346) 555-9876"
+}

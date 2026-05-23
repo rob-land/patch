@@ -1,24 +1,28 @@
-"""libfolks-backed contact name resolution.
+"""Contact name resolution — Folks if available, else a JSON file.
 
-`Folks.IndividualAggregator` aggregates contacts from every backend that
-implements the folks protocol (Evolution Data Server / EDS is the
-common one on GNOME). At startup we kick off `prepare()` async, then
-listen for the `individuals-changed-detailed` signal and rebuild an
-in-memory `E.164 phone -> display name` index.
+Primary source: `Folks.IndividualAggregator` (Evolution Data Server,
+the common GNOME backend). At startup we kick off `prepare()` async,
+listen for `individuals-changed-detailed`, and rebuild an in-memory
+`E.164 phone -> display name` index.
 
-The lookup path is sync: callers (the messages list renderer, the
-dialer recents, the call dialog header) want the name when they render
-the row and don't want to deal with async. Until prepare() resolves
-the lookup just returns None and callers fall back to the raw number.
+Fallback (when Folks isn't in the runtime, which is the case for the
+flatpak under org.gnome.Platform//50): read
+`$XDG_CONFIG_HOME/patch/contacts.json` — a flat JSON object of
+`{ "name": "raw phone number" }` or `{ "raw phone number": "name" }`
+(both shapes accepted). Numbers are normalised to E.164 with US as
+the default country, so "713-555-1234" → "+17135551234" — that's
+the shape cheogram uses for its JIDs, which is what callers look up
+against.
 
-We deliberately don't cache JID -> name. JIDs vary per gateway (cheogram
-vs other JMP-style gateways) and we want the number-extracted lookup
-to work uniformly across them.
+The lookup path is sync — callers (messages list, dialer recents,
+call dialog header) want the name at render time.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import os
 
 from gi.repository import GLib, GObject
 
@@ -53,9 +57,14 @@ class ContactsManager(GObject.Object):
         self._aggregator: Folks.IndividualAggregator | None = None
 
     def start(self) -> None:
-        """Kick off the Folks aggregator. Safe to call once at startup."""
+        """Kick off the contacts source. Safe to call once at startup."""
+        # Always try the JSON fallback first so it's available even
+        # while Folks is preparing (async). The JSON file is the
+        # authoritative source on the flatpak runtime that lacks
+        # libfolks; the Folks aggregator overlays on top.
+        self._load_json_fallback()
         if Folks is None:
-            log.info("folks typelib not present — contacts lookup disabled")
+            log.info("folks typelib not present — JSON-only contacts")
             return
         try:
             self._aggregator = Folks.IndividualAggregator.dup()
@@ -65,6 +74,53 @@ class ContactsManager(GObject.Object):
         self._aggregator.connect(
             "individuals-changed-detailed", self._on_individuals_changed)
         self._aggregator.prepare(self._on_prepared)
+
+    def _load_json_fallback(self) -> None:
+        """Read ~/.config/patch/contacts.json.
+
+        Format: a flat JSON object. Accepts either
+            { "name": "phone number" }
+        or  { "phone number": "name" }
+        (we detect which way each pair runs by checking if either
+        side parses as an E.164 number).
+        """
+        path = self._json_path()
+        if not os.path.exists(path):
+            log.debug("no contacts.json at %s", path)
+            return
+        try:
+            with open(path, encoding="utf-8") as fh:
+                raw = json.load(fh)
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("contacts.json: %s", exc)
+            return
+        if not isinstance(raw, dict):
+            log.warning("contacts.json: top-level must be an object")
+            return
+        added = 0
+        for k, v in raw.items():
+            if not isinstance(v, str):
+                continue
+            # Try "name -> number" first (common direction); if that
+            # fails to normalise, try the reverse "number -> name".
+            num = numfmt.normalize_e164(v, "US")
+            name = k
+            if num is None:
+                num = numfmt.normalize_e164(k, "US")
+                name = v
+            if num is None:
+                log.debug("contacts.json: skipping %r/%r (no parseable phone)",
+                          k, v)
+                continue
+            self._by_number[num] = name
+            added += 1
+        if added:
+            log.info("contacts.json: loaded %d numbers from %s", added, path)
+
+    def _json_path(self) -> str:
+        base = os.environ.get("XDG_CONFIG_HOME") or \
+            os.path.expanduser("~/.config")
+        return os.path.join(base, "patch", "contacts.json")
 
     def lookup(self, number_e164: str) -> str | None:
         """Return the display name for a number, or None if unknown."""
@@ -78,6 +134,37 @@ class ContactsManager(GObject.Object):
         if number is None:
             return None
         return self.lookup(number)
+
+    def label_for_jid(self, jid: str) -> str:
+        """Best-effort display label: contact name if we know it,
+        else a pretty-formatted version of the phone number, else the
+        raw JID."""
+        number = numfmt.jid_to_number(jid, self._account.gateway)
+        if number:
+            name = self.lookup(number)
+            if name:
+                return name
+            return numfmt.format_for_display(number)
+        return jid
+
+    def label_for_group_jid(self, jid: str) -> str:
+        """Group-chat label.
+
+        cheogram's group SMS JIDs encode every participant's number,
+        comma-separated, in the localpart — e.g.
+            "+15551234567,+15557654321,+15558765432@cheogram.com"
+        We split on commas, look each up, and join. Unknown numbers
+        fall back to their pretty-formatted form. If a single JID
+        (no comma), we hand off to label_for_jid.
+        """
+        if not numfmt.is_group_jid(jid):
+            return self.label_for_jid(jid)
+        localpart = jid.split("@", 1)[0]
+        names: list[str] = []
+        for part in localpart.split(","):
+            piece_jid = part + "@" + jid.split("@", 1)[1]
+            names.append(self.label_for_jid(piece_jid))
+        return ", ".join(names)
 
     # -- callbacks -------------------------------------------------------
 
@@ -96,22 +183,27 @@ class ContactsManager(GObject.Object):
         self._rebuild()
 
     def _rebuild(self) -> None:
-        if self._aggregator is None:
-            return
+        # Start from the JSON file (host-system source the user controls)
+        # and let Folks overlay on top — Folks entries win on conflict
+        # because they're the canonical system address book when present.
         new_index: dict[str, str] = {}
-        individuals = self._aggregator.props.individuals
-        # GeeMap iter: pull values
-        for ind in individuals.values():
-            name = ind.props.alias or ind.props.display_name or ""
-            if not name:
-                continue
-            phones = ind.props.phone_numbers or []
-            for ph in phones:
-                value = ph.props.value if hasattr(ph, "props") else ph.get_value()
-                norm = numfmt.normalize_e164(value, "US")
-                if norm:
-                    new_index[norm] = name
-        if new_index != self._by_number:
+        prior_keys = set(self._by_number.keys())
+        self._by_number = {}
+        self._load_json_fallback()
+        new_index.update(self._by_number)
+        if self._aggregator is not None:
+            individuals = self._aggregator.props.individuals
+            for ind in individuals.values():
+                name = ind.props.alias or ind.props.display_name or ""
+                if not name:
+                    continue
+                phones = ind.props.phone_numbers or []
+                for ph in phones:
+                    value = ph.props.value if hasattr(ph, "props") else ph.get_value()
+                    norm = numfmt.normalize_e164(value, "US")
+                    if norm:
+                        new_index[norm] = name
+        if set(new_index.keys()) != prior_keys or new_index != self._by_number:
             log.info("contacts index: %d numbers", len(new_index))
             self._by_number = new_index
             self.emit("index-changed")

@@ -171,7 +171,7 @@ class PatchMessagesPage(Adw.Bin):
                 break
             self.thread_list.remove(child)
         for msg in self._store.thread(remote_jid):
-            self.thread_list.append(_render_thread_row(msg))
+            self.thread_list.append(_render_thread_row(msg, self._contacts))
         self._store.mark_read(remote_jid)
         # Refresh the conversations list so unread badges clear.
         self._refresh_conversation_list()
@@ -353,7 +353,7 @@ class PatchMessagesPage(Adw.Bin):
                 "read":           1,
                 "attachment_url": attachment_url or None,
             }
-            self.thread_list.append(_render_thread_row(msg))
+            self.thread_list.append(_render_thread_row(msg, self._contacts))
             self._store.mark_read(remote_jid)
         self._refresh_conversation_list()
 
@@ -400,8 +400,29 @@ def _is_image_url(url: str) -> bool:
     return urlparse(url).path.lower().endswith(_IMAGE_EXTS)
 
 
-def _render_thread_row(msg: dict) -> Gtk.Widget:
+def _render_thread_row(msg: dict, contacts=None) -> Gtk.Widget:
     align = Gtk.Align.START if msg["incoming"] else Gtk.Align.END
+
+    # For group-SMS messages we know the per-message sender JID; render
+    # the contact name (falling back to formatted number) as a small
+    # label above the bubble so the user can tell who said what.
+    # Only on incoming messages — outgoing ones are obviously us.
+    sender_label = None
+    sender_jid = msg.get("sender_jid")
+    if sender_jid and msg["incoming"]:
+        label_text = (contacts.label_for_jid(sender_jid)
+                      if contacts is not None else sender_jid)
+        sender_label = Gtk.Label(
+            label=label_text,
+            xalign=0,
+            halign=Gtk.Align.START,
+            wrap=False,
+            ellipsize=3,  # PANGO_ELLIPSIZE_END
+        )
+        sender_label.set_margin_start(16)
+        sender_label.set_margin_top(2)
+        sender_label.add_css_class("caption")
+        sender_label.add_css_class("dim-label")
 
     bubble_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
     bubble_box.set_halign(align)
@@ -443,7 +464,15 @@ def _render_thread_row(msg: dict) -> Gtk.Widget:
         bubble_box.append(label)
 
     row = Gtk.ListBoxRow(selectable=False, activatable=False)
-    row.set_child(bubble_box)
+    if sender_label is not None:
+        # Wrap label + bubble in a vertical container so the sender
+        # caption sits directly above its message bubble.
+        wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        wrap.append(sender_label)
+        wrap.append(bubble_box)
+        row.set_child(wrap)
+    else:
+        row.set_child(bubble_box)
     row.set_margin_top(2)
     row.set_margin_bottom(2)
     return row
