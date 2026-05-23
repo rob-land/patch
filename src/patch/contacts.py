@@ -31,14 +31,24 @@ from patch import numfmt
 log = logging.getLogger(__name__)
 
 
-# Folks may not be present in the Flatpak runtime (the GNOME Platform
-# image doesn't include libfolks). Make the import optional so the rest
-# of the app survives — ContactsManager will log a warning at start()
-# and lookup() will always return None, falling back to numfmt rendering.
+# EDS + Folks may not be present in every runtime (the GNOME Platform
+# image doesn't ship them; our flatpak bundles them; native builds get
+# them from the system). Make the imports optional so the rest of the
+# app survives — _load_eds() / Folks fallbacks all detect None and
+# skip cleanly when the libraries aren't there.
 try:
     from gi.repository import Folks
 except (ImportError, ValueError):
     Folks = None
+
+try:
+    import gi as _gi
+    _gi.require_version("EDataServer", "1.2")
+    _gi.require_version("EBookContacts", "1.2")
+    _gi.require_version("EBook", "1.2")
+    from gi.repository import EDataServer, EBookContacts, EBook
+except (ImportError, ValueError):
+    EDataServer = EBookContacts = EBook = None
 
 
 class ContactsManager(GObject.Object):
@@ -76,13 +86,74 @@ class ContactsManager(GObject.Object):
     def _load_local_sources(self) -> None:
         """Pull contacts from every local cache we know how to read.
 
-        Order is overlay-style — JSON file first (the user's manual
-        overrides), GSConnect device caches last (live mirror of the
-        paired phone). Later sources beat earlier ones on key conflict
-        so the live phone data wins over a stale manual entry.
+        Order is overlay-style — EDS first (the system address book
+        and any GOA / CardDAV sources, where the bulk of contacts
+        live), JSON file next (user-curated overrides), GSConnect
+        cache last (live mirror of paired phone). Each later source
+        wins on key conflict so the most-recently-edited representation
+        is the one we surface.
         """
+        self._load_eds()
         self._load_json_fallback()
         self._load_gsconnect_cache()
+
+    def _load_eds(self) -> None:
+        """Read every EDS address-book source via libebook directly.
+
+        Talks to evolution-source-registry + evolution-addressbook-
+        factory over D-Bus. In a flatpak that means the bundled
+        libebook reaches the *host's* EDS daemons (because we declared
+        --talk-name=org.gnome.evolution.dataserver.*). Each source's
+        contacts are pulled in one bulk get_contacts_sync; we extract
+        the display name + each TEL field and index by E.164.
+
+        We use EDS direct rather than libfolks because:
+          - folks adds cross-store merging we don't need for a
+            number-to-name lookup,
+          - the FolksEds backend has been empirically reluctant to
+            surface Radicale/CardDAV sources in our test environment,
+            while EBook.BookClient sees them immediately.
+        """
+        if EDataServer is None or EBook is None:
+            return
+        try:
+            reg = EDataServer.SourceRegistry.new_sync(None)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("EDS source registry unavailable: %s", exc)
+            return
+        ext = EDataServer.SOURCE_EXTENSION_ADDRESS_BOOK
+        added = 0
+        sources_seen = 0
+        for src in reg.list_sources(None):
+            if not src.has_extension(ext):
+                continue
+            sources_seen += 1
+            try:
+                book = EBook.BookClient.connect_sync(src, 5, None)
+                ok, contacts = book.get_contacts_sync(
+                    EBookContacts.book_query_any_field_contains("").to_string(),
+                    None)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("EDS book %s unreadable: %s",
+                          src.get_display_name(), exc)
+                continue
+            if not contacts:
+                continue
+            for c in contacts:
+                name = (c.get_property("full-name") or "").strip()
+                if not name:
+                    continue
+                for attr in c.get_attributes(EBookContacts.ContactField.TEL):
+                    value = (attr.get_value() or "").strip()
+                    if not value:
+                        continue
+                    norm = numfmt.normalize_e164(value, "US")
+                    if norm and norm not in self._by_number:
+                        self._by_number[norm] = name
+                        added += 1
+        if added:
+            log.info("EDS: loaded %d numbers from %d address book(s)",
+                     added, sources_seen)
 
     def _load_json_fallback(self) -> None:
         """Read ~/.config/patch/contacts.json.
