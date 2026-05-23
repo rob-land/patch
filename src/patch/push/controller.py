@@ -87,8 +87,21 @@ class PushController(GObject.Object):
 
     def _on_message(self, _connector, body: bytes, message_id: str):
         log.info("push delivered, id=%s len=%d", message_id, len(body))
+        # ALWAYS wake XMPP and hold the app open, regardless of whether
+        # the payload decrypts. The payload is a hint about what changed
+        # — without it we still need to reconnect, fetch via smacks /
+        # MAM, and surface notifications. Earlier this returned early on
+        # decrypt failure, which broke cold-wake recovery whenever a
+        # push arrived with stale or malformed crypto: Patch came up
+        # via D-Bus activation, failed decrypt, returned, and
+        # --gapplication-service exited a few seconds later without
+        # ever connecting to XMPP or re-sending its enable IQ.
+        self._xmpp.connect_to_server()
+        self._hold_briefly()
         plaintext = self._decrypt(body)
         if plaintext is None:
+            log.info("decrypt failed; XMPP wake-up will surface "
+                     "any pending stanzas")
             return
         log.debug("push plaintext (%d bytes): %s",
                   len(plaintext), plaintext[:200])
@@ -98,15 +111,6 @@ class PushController(GObject.Object):
             log.warning("push payload not JSON; treating as raw wake signal")
             payload = {}
         log.info("push payload: %s", payload)
-        # Wake the XMPP stream — for the warm-resident path the client is
-        # already connected and this is a no-op; for cold-start we just
-        # came up and need to actually log in.
-        self._xmpp.connect_to_server()
-        # Hold the application open long enough for the XMPP stream to
-        # come up, flush the queued message, and fire the user-facing
-        # notification. Without this, --gapplication-service can exit
-        # before the message arrives over the wire.
-        self._hold_briefly()
 
     def _hold_briefly(self) -> None:
         app = Gio.Application.get_default()
