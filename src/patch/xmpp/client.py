@@ -293,12 +293,12 @@ class XmppClient(GObject.Object):
             log.debug("carbons enable failed: %s", exc)
         self._account.set_state(account_mod.STATE_CONNECTED)
         self.emit("state-changed", account_mod.STATE_CONNECTED)
-        # MAM catch-up off by default for now — nbxmpp 7.2 chokes on
-        # large concatenated batches with an ExpatError that tears the
-        # whole stream down. Live stanzas come through stanza-received
-        # without MAM. Toggle PATCH_MAM_CATCHUP=1 in the env to opt in.
+        # MAM catch-up on by default — paginated via RSM (see
+        # _request_mam_catchup) in pages of MAM_PAGE so the nbxmpp 7.2
+        # large-batch parse issue is sidestepped. PATCH_MAM_CATCHUP=0
+        # to opt OUT (e.g. for debugging).
         import os
-        if os.environ.get("PATCH_MAM_CATCHUP") == "1":
+        if os.environ.get("PATCH_MAM_CATCHUP", "1") == "1":
             self._request_mam_catchup()
 
     def _on_login_successful(self, _client, _signal_name):
@@ -562,6 +562,13 @@ class XmppClient(GObject.Object):
 
     # -- MAM catch-up ----------------------------------------------------
 
+    # MAM (XEP-0313 + XEP-0059 RSM) catch-up. nbxmpp 7.2 chokes on
+    # large MAM batches arriving in one TCP read — the SimpleXML parser
+    # misinterprets the concatenated byte stream as 'stream finished'
+    # mid-blob. Cap each page at MAM_PAGE messages and walk the RSM
+    # cursor until complete=True.
+    MAM_PAGE = 20
+
     def _request_mam_catchup(self) -> None:
         if self._client is None or self._store is None:
             return
@@ -580,28 +587,52 @@ class XmppClient(GObject.Object):
             # in months of unrelated archive.
             start = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
         own_jid = JID.from_string(self._account.jid)
-        queryid = "patch-catchup"
         log.info("MAM catch-up from %s", start.isoformat(timespec="seconds"))
-        # nbxmpp 7.2 has a known issue parsing large concatenated MAM
-        # batches in one TCP read; the SimpleXML parser misinterprets
-        # the byte stream as "stream finished" mid-blob and tears the
-        # connection down. Keep `max_` small so each batch fits in one
-        # TCP segment. TODO: paginate via RSM cursor for full history.
+        # Stash MAM state on self instead of closing over kwargs in a
+        # lambda — nbxmpp's add_done_callback uses weak=True by default,
+        # and a lambda has no strong owner so the weakref dies before
+        # the iq response arrives and the callback never fires.
+        self._mam = mam
+        self._mam_jid = own_jid.bare
+        self._mam_start = start
+        self._mam_page = 1
+        self._mam_query_page(after=None)
+
+    def _mam_query_page(self, after: str | None) -> None:
+        """Fire one MAM page; the bound-method callback chains to the
+        next on incomplete results."""
         try:
-            mam.make_query(
-                jid=own_jid.bare,
-                queryid=queryid,
-                start=start,
-                max_=20,
-                callback=self._on_mam_query_done,
+            self._mam.make_query(
+                jid=self._mam_jid,
+                queryid=f"patch-catchup-p{self._mam_page}",
+                start=self._mam_start,
+                max_=self.MAM_PAGE,
+                after=after,
+                callback=self._on_mam_page_done,
             )
         except Exception as exc:  # noqa: BLE001
-            log.warning("MAM query failed to dispatch: %s", exc)
+            log.warning("MAM page %d failed to dispatch: %s",
+                        self._mam_page, exc)
 
-    def _on_mam_query_done(self, task):
+    def _on_mam_page_done(self, task) -> None:
+        page = self._mam_page
         try:
             result = task.finish()
         except Exception as exc:  # noqa: BLE001
-            log.warning("MAM catch-up failed: %s", exc)
+            log.warning("MAM page %d failed: %s", page, exc)
             return
-        log.info("MAM catch-up done: complete=%s", getattr(result, "complete", "?"))
+        complete = bool(getattr(result, "complete", False))
+        # rsm.last is the cursor for the NEXT page (per XEP-0059 §3.6).
+        rsm = getattr(result, "rsm", None)
+        last = getattr(rsm, "last", None) if rsm else None
+        log.info("MAM page %d: complete=%s last=%s",
+                 page, complete,
+                 (last[:12] + "...") if last else last)
+        if complete or not last:
+            log.info("MAM catch-up done (%d page%s)",
+                     page, "" if page == 1 else "s")
+            return
+        # Schedule the next page on the next idle so the dispatcher has
+        # a chance to drain whatever just landed before we ask for more.
+        self._mam_page = page + 1
+        GLib.idle_add(self._mam_query_page, last)

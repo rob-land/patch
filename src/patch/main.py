@@ -70,6 +70,7 @@ class PatchApplication(Adw.Application):
             window_provider=lambda: self.props.active_window,
             focus_provider=self._focused_jid,
             contacts=self._contacts,
+            calls=self._calls,
         )
 
         for name, handler in (

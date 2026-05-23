@@ -26,7 +26,7 @@ class NotificationManager:
     """Bridges XMPP message arrival to Gio.Notification with sensible gating."""
 
     def __init__(self, app, account, xmpp, window_provider, focus_provider,
-                 contacts=None):
+                 contacts=None, calls=None):
         """Constructor.
 
         Arguments
@@ -58,6 +58,15 @@ class NotificationManager:
 
         self._xmpp.connect("message-received", self._on_message)
 
+        # Missed-call notifications. Fire when an incoming call's terminal
+        # state is REJECTED/RETRACTED — i.e. the user didn't pick up
+        # (either ignored it or another resource handled it). Tap opens
+        # the conversation with the caller so the user can call back or
+        # text. We don't fire on STATE_ENDED (active->ended = answered
+        # then hung up — that's a completed call, not a missed one).
+        if calls is not None:
+            calls.connect("call-ended", self._on_call_ended)
+
     # -- handlers --------------------------------------------------------
 
     def _on_message(self, _xmpp, remote_jid, body, incoming, _timestamp,
@@ -70,6 +79,31 @@ class NotificationManager:
         if self._is_focused(remote_jid):
             return
         self._fire_notification(remote_jid, body)
+
+    def _on_call_ended(self, _manager, session):
+        # Only missed-call-shaped terminals: an INCOMING call that the
+        # user didn't actively answer.
+        if not session.incoming:
+            return
+        from patch import calls as calls_mod
+        if session.state not in (calls_mod.STATE_REJECTED,
+                                 calls_mod.STATE_RETRACTED):
+            return
+        title = session.peer_label or _display_name(
+            session.peer_jid, self._account.gateway, self._contacts)
+        body = "Missed call"
+        notif = Gio.Notification.new(title)
+        notif.set_body(body)
+        try:
+            notif.set_icon(Gio.ThemedIcon.new("call-missed-symbolic"))
+        except Exception:  # noqa: BLE001
+            pass
+        # Tap opens the conversation with the caller.
+        notif.set_default_action_and_target(
+            "app.open-conversation", GLib.Variant("s", session.peer_jid))
+        nid = "patch-missed-" + session.session_id
+        self._app.send_notification(nid, notif)
+        log.info("missed-call notification: %s", title)
 
     def _on_open_conversation(self, _action, param):
         jid = param.get_string()
