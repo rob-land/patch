@@ -336,7 +336,15 @@ class AudioEngine(GObject.Object):
                              caps=Gst.Caps.from_string(
                                  "audio/x-raw,rate=8000,channels=1"))
             encoder  = _make("mulawenc",     "mic_enc")
-            payloader = _make("rtppcmupay",  "mic_pay", pt=0)
+            # rtppcmupay's default packetisation depends on the upstream
+            # buffer size — pulsesrc tends to feed it ~10ms chunks, so
+            # without explicit ptime we ship 80-byte / 10ms PCMU packets
+            # while cheogram (and every SIP gateway) wants the standard
+            # 20ms / 160-byte profile. Pin min/max-ptime to 20ms so the
+            # payloader buffers and emits one packet per 160 samples.
+            payloader = _make("rtppcmupay",  "mic_pay", pt=0,
+                              min_ptime=20_000_000,
+                              max_ptime=20_000_000)
             outcaps  = _make("capsfilter",   "mic_outcaps",
                              caps=Gst.Caps.from_string(
                                  "application/x-rtp,media=audio,"
