@@ -326,7 +326,10 @@ class AudioEngine(GObject.Object):
             return el
 
         try:
-            src      = _make("pulsesrc",     "mic_src", is_live=True)
+            # pulsesrc is intrinsically a live source — it has no
+            # is-live property to set (that's audiotestsrc's). Don't
+            # pass kwargs here; the live behaviour is baked in.
+            src      = _make("pulsesrc",     "mic_src")
             convert  = _make("audioconvert", "mic_conv")
             resample = _make("audioresample","mic_res")
             capsf    = _make("capsfilter",   "mic_caps",
