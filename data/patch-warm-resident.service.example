@@ -1,0 +1,36 @@
+# Example systemd user unit — copy to ~/.config/systemd/user/patch.service
+# then run:
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now patch.service
+#
+# Keeps Patch resident across the user session with OOM protection so
+# incoming JMI calls reach an already-connected client instead of
+# paying the cold-start tax (D-Bus activate → start → XMPP connect
+# → smacks resume → ring). The first ring on a cold Patch can take
+# 5–10s by which point cheogram's JMI ringing window may have closed.
+
+[Unit]
+Description=Patch — JMP.chat client (warm-resident)
+After=kunifiedpush-distributor.service
+Wants=kunifiedpush-distributor.service
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/flatpak run land.rob.patch
+Restart=on-failure
+RestartSec=10
+
+# Patch is a phone client — if we're killed, calls go to voicemail.
+# -500 makes the kernel prefer almost anything else; KUP itself uses
+# -800 so it survives even tighter pressure.
+OOMScoreAdjust=-500
+ManagedOOMPreference=avoid
+
+# Memory guarantee. Idle ~80-120 MB, ~150 MB during a call. 128M
+# MemoryLow gives the kernel enough room for cgroup-based pressure
+# decisions without being a hard cap.
+MemoryLow=128M
+MemorySwapMax=0
+
+[Install]
+WantedBy=default.target

@@ -36,17 +36,33 @@ App ID: `land.rob.patch`. License: GPL-3.0-or-later.
   state machine + `Adw.Dialog` call screen. Live-tested end-to-end
   against JMP: propose → proceed/accept (XEP-0353 targets per §6.2) →
   active.
-- **Phase 4** Incoming Jingle audio — signalling layer ✅, media path
-  scaffolded. `src/patch/xmpp/jingle.py` builds + parses the XEP-0166/
-  0167/0176/0320 stanzas; `src/patch/jingle_session.py` orchestrates
-  one in-flight session; `src/patch/audio.py` drives webrtcbin with
-  PCMU (G.711 µ-law, 8 kHz mono — cheogram offers no Opus). Live
-  test 2026-05-22 confirmed the gateway accepts our session-accept
-  and trickles ICE candidates back; **ICE never converged so no
-  actual audio flowed before the peer terminated at ~20s**. Likely
-  webrtcbin ↔ cheogram DTLS-SRTP interop or flatpak-sandbox NAT
-  traversal — next iteration needs the new ICE/connection/signaling
-  state logs (added 2026-05-22) to pinpoint.
+- **Phase 4** ✅ Incoming Jingle audio — bidirectional audio confirmed
+  end-to-end against JMP 2026-05-22. `src/patch/xmpp/jingle.py` builds
+  + parses XEP-0166/0167/0176/0320; `src/patch/jingle_session.py`
+  orchestrates one session; `src/patch/audio.py` drives webrtcbin
+  with PCMU (8 kHz mono — cheogram offers no Opus, only the SIP
+  toll-grade trio PCMU/G722/telephone-event). Required to get there:
+    - `<rtcp-mux/>` advertised in session-accept (without it cheogram
+      allocates separate component=2 candidates for RTCP, ICE never
+      converges on the missing pair)
+    - real nbxmpp dispatcher handler for iq/set in NS_JINGLE that
+      raises NodeProcessed (just listening to 'stanza-received' lets
+      the default handler send feature-not-implemented alongside our
+      iq-result, confusing the gateway)
+    - ufrag/pwd/fingerprint on every trickled transport-info
+      `<transport>` (peer drops candidates that can't be paired with
+      a session)
+    - flat element chain on the main pipeline for mic + playback
+      (Gst.parse_bin_from_description nests in a sub-bin whose
+      segment/live-clock doesn't propagate to webrtcbin; rtpsession
+      can't compute running-time and outbound RTP never gets framed)
+    - `min-ptime=max-ptime=20_000_000 ns` on rtppcmupay (default
+      packetisation follows upstream buffer size; pulsesrc tends to
+      feed 10ms chunks, but SIP gateways expect the standard 20ms /
+      160-byte PCMU profile)
+  Remaining: cold-start to first-audio is ~10s (TURN disco +
+  ICE checks + DTLS handshake). The deployment recipe at
+  `data/patch-warm-resident.service.example` is the practical fix.
 - **Phase 5** ✅ Outgoing calls — JMI propose; if/when audio flows
   it'll use the same engine path as Phase 4.
 - **Phase 6** ✅ MMS — inbound XEP-0066 OOB image rendering inline in
