@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gio, GLib, Gtk
 
 from patch import calls
 
@@ -22,6 +22,7 @@ class PatchCallDialog(Adw.Dialog):
     accept_button:  Gtk.Button      = Gtk.Template.Child()
     reject_button:  Gtk.Button      = Gtk.Template.Child()
     hangup_button:  Gtk.Button      = Gtk.Template.Child()
+    dtmf_pad:       Gtk.Grid        = Gtk.Template.Child()
 
     def __init__(self, manager, session):
         super().__init__()
@@ -31,6 +32,16 @@ class PatchCallDialog(Adw.Dialog):
         # this to compute MM:SS.
         self._active_since: float | None = None
         self._timer_source: int = 0
+
+        # Dialpad action: each button activates patch.dtmf("<digit>")
+        # which we route through CallManager.send_dtmf during ACTIVE
+        # calls. Scoped to the dialog so it disappears with it.
+        actions = Gio.SimpleActionGroup()
+        dtmf_action = Gio.SimpleAction.new(
+            "dtmf", GLib.VariantType.new("s"))
+        dtmf_action.connect("activate", self._on_dtmf)
+        actions.add_action(dtmf_action)
+        self.insert_action_group("patch", actions)
 
         self.peer_label.set_text(session.peer_label or session.peer_jid)
         self._refresh_state()
@@ -43,6 +54,10 @@ class PatchCallDialog(Adw.Dialog):
         self.accept_button.connect("clicked", lambda *_: self._manager.accept_incoming())
         self.reject_button.connect("clicked", lambda *_: self._manager.reject_incoming())
         self.hangup_button.connect("clicked", lambda *_: self._on_hangup())
+
+    def _on_dtmf(self, _action, param):
+        digit = param.get_string()
+        self._manager.send_dtmf(digit)
 
     # -- state-driven UI -------------------------------------------------
 
@@ -67,6 +82,8 @@ class PatchCallDialog(Adw.Dialog):
         self.accept_button.set_visible(ringing)
         self.reject_button.set_visible(ringing)
         self.hangup_button.set_visible(active or proposing)
+        # Touch-tone dialpad only makes sense while a call is live.
+        self.dtmf_pad.set_visible(active)
         # The header has no close button — let the user dismiss only
         # after the session is terminal.
         self.set_can_close(sess.is_terminal)

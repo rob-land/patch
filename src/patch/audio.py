@@ -287,6 +287,8 @@ class AudioEngine(GObject.Object):
         super().__init__()
         self._pipeline: Gst.Pipeline | None = None
         self._webrtc:   Gst.Element  | None = None
+        self._funnel:   Gst.Element  | None = None
+        self._dtmf_src: Gst.Element  | None = None
         self._turn_uri = turn_uri
         self._stats_source: int = 0
 
@@ -350,6 +352,24 @@ class AudioEngine(GObject.Object):
                                  "application/x-rtp,media=audio,"
                                  "encoding-name=PCMU,payload=0,"
                                  "clock-rate=8000"))
+            # DTMF (RFC 4733). rtpdtmfsrc sits idle until send_dtmf()
+            # pushes a dtmf-event upstream — then it injects RTP
+            # packets at PT 101 alongside the audio stream. We funnel
+            # the two together so both flow through a single webrtcbin
+            # sink pad (and therefore a single transceiver with shared
+            # SSRC, which is what SIP gateways expect).
+            self._funnel = _make("funnel",   "audio_funnel")
+            self._dtmf_src = _make("rtpdtmfsrc", "dtmf_src",
+                                   pt=101, clock_rate=8000)
+            # NOTE: rtpdtmfsrc's pad template uses
+            # encoding-name=TELEPHONE-EVENT (uppercase). Caps are
+            # case-sensitive, so the SDP-shape lowercase form would
+            # silently refuse the link.
+            dtmf_caps = _make("capsfilter",  "dtmf_caps",
+                              caps=Gst.Caps.from_string(
+                                  "application/x-rtp,media=audio,"
+                                  "encoding-name=TELEPHONE-EVENT,"
+                                  "payload=101,clock-rate=8000"))
         except RuntimeError as exc:
             log.warning("audio engine init: %s", exc)
             return False
@@ -361,11 +381,19 @@ class AudioEngine(GObject.Object):
                 log.warning("failed to link %s -> %s",
                             a.get_name(), b.get_name())
                 return False
-        # Link the final capsfilter's src pad into webrtcbin's request
-        # sink_%u pad. webrtcbin reads the caps and creates a sendrecv
-        # transceiver matching them.
-        if not outcaps.link(self._webrtc):
-            log.warning("failed to link mic chain into webrtcbin")
+        # Plumb mic + DTMF through the funnel into webrtcbin's request
+        # sink_%u pad. webrtcbin reads caps from each input and adds
+        # both payload types to the audio transceiver.
+        for upstream in (outcaps, dtmf_caps):
+            if not upstream.link(self._funnel):
+                log.warning("failed to link %s -> funnel",
+                            upstream.get_name())
+                return False
+        if not self._dtmf_src.link(dtmf_caps):
+            log.warning("failed to link dtmf src into caps")
+            return False
+        if not self._funnel.link(self._webrtc):
+            log.warning("failed to link audio funnel into webrtcbin")
             return False
         # Playback: pad-added → rtppcmudepay → mulawdec → pulsesink.
         self._webrtc.connect("pad-added", self._on_pad_added)
@@ -449,6 +477,65 @@ class AudioEngine(GObject.Object):
         if sdp_line.startswith("a="):
             sdp_line = sdp_line[2:]
         self._webrtc.emit("add-ice-candidate", mline_index, sdp_line)
+
+    # -- DTMF (RFC 4733) -------------------------------------------------
+
+    # GStreamer's rtpdtmfsrc uses 0-9 for digits, 10 for '*', 11 for '#',
+    # 12-15 for A-D (per RFC 4733). We map the touch-tone characters
+    # the dialer surfaces to those event numbers.
+    _DTMF_MAP = {
+        "0": 0, "1": 1, "2": 2, "3": 3, "4": 4,
+        "5": 5, "6": 6, "7": 7, "8": 8, "9": 9,
+        "*": 10, "#": 11,
+        "A": 12, "B": 13, "C": 14, "D": 15,
+    }
+
+    def send_dtmf(self, digit: str, duration_ms: int = 200) -> bool:
+        """Send a single RFC 4733 DTMF tone via the rtpdtmfsrc element.
+
+        Returns True if dispatched. Schedules a stop event after the
+        configured duration so the tone has a finite length on the
+        peer's side; without that, the peer would hear a continuous
+        tone until we restart or terminate the session.
+        """
+        if self._dtmf_src is None or self._funnel is None \
+                or self._pipeline is None:
+            return False
+        digit = digit.upper()
+        event_num = self._DTMF_MAP.get(digit)
+        if event_num is None:
+            log.warning("unknown DTMF digit: %r", digit)
+            return False
+        # The dtmf-event is a CUSTOM_UPSTREAM event — it must travel
+        # from a downstream sink pad UP to rtpdtmfsrc. Pushing it on
+        # rtpdtmfsrc's own src pad goes the wrong direction (gst warns
+        # "pushing custom-upstream event in wrong direction"). Send it
+        # via the funnel's src pad instead, which carries it back
+        # upstream to all the funnel's sinks — rtpdtmfsrc included.
+        pad = self._funnel.get_static_pad("src")
+        if pad is None:
+            return False
+
+        def _event(start: bool) -> Gst.Event:
+            struct = Gst.Structure.new_empty("dtmf-event")
+            struct.set_value("type", 1)          # RTP event
+            struct.set_value("number", event_num)
+            struct.set_value("method", 1)        # RFC 2833 / 4733
+            struct.set_value("volume", 25)       # dB attenuation
+            struct.set_value("start", start)
+            return Gst.Event.new_custom(
+                Gst.EventType.CUSTOM_UPSTREAM, struct)
+
+        if not pad.send_event(_event(True)):
+            log.warning("dtmf start event refused for %r", digit)
+            return False
+        log.info("dtmf: %s (%dms)", digit, duration_ms)
+
+        def _stop() -> bool:
+            pad.send_event(_event(False))
+            return False  # one-shot
+        GLib.timeout_add(duration_ms, _stop)
+        return True
 
     # -- internal callbacks --------------------------------------------
 

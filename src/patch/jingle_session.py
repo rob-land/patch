@@ -183,6 +183,13 @@ class JingleSession(GObject.Object):
             self.engine.stop()
             self._engine_ready = False
 
+    def send_dtmf(self, digit: str) -> bool:
+        """User pressed a dialpad digit during an active call."""
+        if self.engine is None or not self._engine_ready:
+            log.debug("dtmf %s: engine not ready", digit)
+            return False
+        return self.engine.send_dtmf(digit)
+
     # -- candidate trickle ---------------------------------------------
 
     def _on_local_candidate(self, _engine, sdp_line: str):

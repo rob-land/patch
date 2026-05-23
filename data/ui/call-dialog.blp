@@ -50,6 +50,32 @@ template $PatchCallDialog: Adw.Dialog {
         styles ["title-3", "dim-label"]
       }
 
+      // Touch-tone dialpad — shown only during active calls. Each
+      // button activates patch.dtmf("<digit>") which JingleSession
+      // forwards through the rtpdtmfsrc element as an RFC 4733 RTP
+      // event (PT 101 telephone-event).
+      Gtk.Grid dtmf_pad {
+        visible: false;
+        column-spacing: 8;
+        row-spacing: 8;
+        column-homogeneous: true;
+        row-homogeneous: true;
+        halign: center;
+
+        Gtk.Button { label: "1"; action-name: "patch.dtmf"; action-target: "\"1\""; styles ["circular"] layout { column: 0; row: 0; }}
+        Gtk.Button { label: "2"; action-name: "patch.dtmf"; action-target: "\"2\""; styles ["circular"] layout { column: 1; row: 0; }}
+        Gtk.Button { label: "3"; action-name: "patch.dtmf"; action-target: "\"3\""; styles ["circular"] layout { column: 2; row: 0; }}
+        Gtk.Button { label: "4"; action-name: "patch.dtmf"; action-target: "\"4\""; styles ["circular"] layout { column: 0; row: 1; }}
+        Gtk.Button { label: "5"; action-name: "patch.dtmf"; action-target: "\"5\""; styles ["circular"] layout { column: 1; row: 1; }}
+        Gtk.Button { label: "6"; action-name: "patch.dtmf"; action-target: "\"6\""; styles ["circular"] layout { column: 2; row: 1; }}
+        Gtk.Button { label: "7"; action-name: "patch.dtmf"; action-target: "\"7\""; styles ["circular"] layout { column: 0; row: 2; }}
+        Gtk.Button { label: "8"; action-name: "patch.dtmf"; action-target: "\"8\""; styles ["circular"] layout { column: 1; row: 2; }}
+        Gtk.Button { label: "9"; action-name: "patch.dtmf"; action-target: "\"9\""; styles ["circular"] layout { column: 2; row: 2; }}
+        Gtk.Button { label: "*"; action-name: "patch.dtmf"; action-target: "\"*\""; styles ["circular"] layout { column: 0; row: 3; }}
+        Gtk.Button { label: "0"; action-name: "patch.dtmf"; action-target: "\"0\""; styles ["circular"] layout { column: 1; row: 3; }}
+        Gtk.Button { label: "#"; action-name: "patch.dtmf"; action-target: "\"#\""; styles ["circular"] layout { column: 2; row: 3; }}
+      }
+
       Gtk.Box {
         orientation: vertical;
         spacing: 4;
@@ -78,14 +104,6 @@ template $PatchCallDialog: Adw.Dialog {
             visible: false;
             styles ["pill", "destructive-action"]
           }
-        }
-
-        Gtk.Label warning_label {
-          margin-top: 8;
-          wrap: true;
-          justify: center;
-          label: _("Audio is not wired up yet — this is XEP-0353 signalling only.");
-          styles ["caption", "dim-label"]
         }
       }
     };

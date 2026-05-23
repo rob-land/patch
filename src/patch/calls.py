@@ -178,6 +178,19 @@ class CallManager(GObject.Object):
             self._jingle = None
         self._transition(sess, STATE_ENDED)
 
+    def send_dtmf(self, digit: str) -> bool:
+        """Forward a touch-tone digit through the active Jingle session.
+
+        Returns False if there's no active call to send through; the UI
+        treats that as 'press did nothing' rather than an error.
+        """
+        sess = self._session
+        if sess is None or sess.state != STATE_ACTIVE:
+            return False
+        if self._jingle is None:
+            return False
+        return self._jingle.send_dtmf(digit)
+
     # -- inbound from XmppClient ----------------------------------------
 
     def _on_jmi(self, _xmpp, action, session_id, peer_jid, incoming):
