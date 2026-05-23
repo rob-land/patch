@@ -15,7 +15,8 @@
     "--talk-name=org.freedesktop.secrets",
     "--talk-name=org.unifiedpush.Distributor.*",
     "--talk-name=org.sigxcpu.Feedback",
-    "--own-name=land.rob.patch"
+    "--own-name=land.rob.patch",
+    "--filesystem=xdg-cache/gsconnect:ro"
   ],
   "cleanup": [
     "/include",
