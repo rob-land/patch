@@ -57,6 +57,11 @@ class CallSession(GObject.Object):
     peer_label  = GObject.Property(type=str, default="")
     incoming    = GObject.Property(type=bool, default=False)
     state       = GObject.Property(type=str, default=STATE_IDLE)
+    # XEP-0166/0167 hold flags. local_held = we sent <hold/>;
+    # remote_held = peer sent <hold/>. UI shows "On hold" when either
+    # is true.
+    local_held  = GObject.Property(type=bool, default=False)
+    remote_held = GObject.Property(type=bool, default=False)
 
     def __init__(self, session_id: str, peer_jid: str, peer_label: str,
                  incoming: bool, initial_state: str):
@@ -207,6 +212,14 @@ class CallManager(GObject.Object):
             return
         self._jingle.set_mic_mute(muted)
 
+    def set_hold(self, hold: bool) -> None:
+        """XEP-0166 hold/unhold the active call. No-op if no call."""
+        if self._jingle is None or self._session is None:
+            return
+        self._jingle.set_hold(hold)
+        self._session.local_held = hold
+        self.emit("call-changed", self._session)
+
     # -- inbound from XmppClient ----------------------------------------
 
     def _on_jmi(self, _xmpp, action, session_id, peer_jid, incoming):
@@ -313,6 +326,12 @@ class CallManager(GObject.Object):
             self._jingle.handle_session_accept(parsed)
         elif action == "transport-info":
             self._jingle.handle_transport_info(parsed)
+        elif action == "session-info":
+            # XEP-0167 RTP info — peer-initiated hold/unhold.
+            info = parsed.get("rtp_info")
+            if info in ("hold", "unhold") and sess is not None:
+                sess.remote_held = (info == "hold")
+                self.emit("call-changed", sess)
         elif action == "session-terminate":
             self._jingle.handle_session_terminate(parsed)
             self._jingle = None

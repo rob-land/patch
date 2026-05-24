@@ -25,6 +25,7 @@ class PatchCallDialog(Adw.Dialog):
     dtmf_pad:       Gtk.Grid         = Gtk.Template.Child()
     in_call_controls: Gtk.Box        = Gtk.Template.Child()
     mute_button:    Gtk.ToggleButton = Gtk.Template.Child()
+    hold_button:    Gtk.ToggleButton = Gtk.Template.Child()
 
     def __init__(self, manager, session):
         super().__init__()
@@ -57,6 +58,7 @@ class PatchCallDialog(Adw.Dialog):
         self.reject_button.connect("clicked", lambda *_: self._manager.reject_incoming())
         self.hangup_button.connect("clicked", lambda *_: self._on_hangup())
         self.mute_button.connect("toggled", self._on_mute_toggled)
+        self.hold_button.connect("toggled", self._on_hold_toggled)
 
     def _on_dtmf(self, _action, param):
         digit = param.get_string()
@@ -76,6 +78,12 @@ class PatchCallDialog(Adw.Dialog):
     def _refresh_state(self):
         sess = self._session
         title, sub = self._STATE_COPY.get(sess.state, (sess.state, ""))
+        # Held state — either side. The duration ticker still runs
+        # underneath; we override the visible text while held.
+        if sess.state == calls.STATE_ACTIVE and (
+                sess.local_held or sess.remote_held):
+            sub = ("On hold" if sess.local_held
+                   else "Peer on hold")
         self.header_title.set_title(title)
         self.state_label.set_text(sub)
 
@@ -141,3 +149,6 @@ class PatchCallDialog(Adw.Dialog):
 
     def _on_mute_toggled(self, button):
         self._manager.set_mic_mute(button.get_active())
+
+    def _on_hold_toggled(self, button):
+        self._manager.set_hold(button.get_active())

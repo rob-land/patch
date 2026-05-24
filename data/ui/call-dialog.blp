@@ -92,6 +92,12 @@ template $PatchCallDialog: Adw.Dialog {
           tooltip-text: _("Mute microphone");
           styles ["circular"]
         }
+
+        Gtk.ToggleButton hold_button {
+          icon-name: "media-playback-pause-symbolic";
+          tooltip-text: _("Hold call");
+          styles ["circular"]
+        }
       }
 
       Gtk.Box {

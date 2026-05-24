@@ -65,6 +65,23 @@ def session_accept(
     return iq
 
 
+NS_JINGLE_RTP_INFO = "urn:xmpp:jingle:apps:rtp:info:1"
+
+
+def session_info_hold(*, to_jid: str, sid: str, hold: bool = True) -> Iq:
+    """Build a XEP-0166 session-info IQ carrying <hold/> or <unhold/>
+    per XEP-0167 §8 (RTP info). Cheogram bridges this to a SIP RFC-3264
+    a=sendonly / a=recvonly attribute on the SIP leg, so the PSTN
+    party hears their carrier's standard hold tone."""
+    iq = Iq(typ="set", to=to_jid)
+    jingle = iq.addChild("jingle", namespace=NS_JINGLE, attrs={
+        "action": "session-info", "sid": sid,
+    })
+    jingle.addChild("hold" if hold else "unhold",
+                    namespace=NS_JINGLE_RTP_INFO)
+    return iq
+
+
 def session_terminate(*, to_jid: str, sid: str, reason: str = "success") -> Iq:
     iq = Iq(typ="set", to=to_jid)
     jingle = iq.addChild("jingle", namespace=NS_JINGLE, attrs={
@@ -162,6 +179,13 @@ def parse_jingle(iq) -> dict | None:
     jingle = iq.getTag("jingle", namespace=NS_JINGLE)
     if jingle is None:
         return None
+    # XEP-0167 RTP info: detect <hold/> / <unhold/> on a session-info
+    # action. None on other actions or when no info child is present.
+    rtp_info = None
+    if jingle.getTag("hold", namespace=NS_JINGLE_RTP_INFO) is not None:
+        rtp_info = "hold"
+    elif jingle.getTag("unhold", namespace=NS_JINGLE_RTP_INFO) is not None:
+        rtp_info = "unhold"
     return {
         "action":     jingle.getAttr("action"),
         "sid":        jingle.getAttr("sid"),
@@ -172,6 +196,7 @@ def parse_jingle(iq) -> dict | None:
         "id":         iq.getAttr("id"),
         "contents":   _parse_contents(jingle),
         "reason":     _parse_reason(jingle),
+        "rtp_info":   rtp_info,
     }
 
 

@@ -222,6 +222,22 @@ class JingleSession(GObject.Object):
             return
         self.engine.set_mic_mute(muted)
 
+    def set_hold(self, hold: bool) -> None:
+        """XEP-0166 session-info hold/unhold. Send the IQ and mute the
+        mic locally — the peer should stop sending RTP when notified,
+        but we proactively stop too. Cheogram forwards this to the
+        SIP leg as a sendrecv / sendonly toggle so the PSTN side gets
+        a proper hold tone."""
+        try:
+            iq = jingle_mod.session_info_hold(
+                to_jid=self.peer_jid, sid=self.sid, hold=hold)
+            self._xmpp.send_iq(iq)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("session-info hold failed: %s", exc)
+            return
+        if self.engine is not None:
+            self.engine.set_mic_mute(hold)
+
     # -- candidate trickle ---------------------------------------------
 
     def _on_local_candidate(self, _engine, sdp_line: str):
