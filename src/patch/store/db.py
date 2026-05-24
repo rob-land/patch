@@ -77,6 +77,11 @@ _MIGRATIONS = [
     # body. NULL on messages that aren't a reply.
     ("reply_to_id",
      "ALTER TABLE messages ADD COLUMN reply_to_id TEXT"),
+    # XEP-0308 last message correction: timestamp of the most recent
+    # edit applied to body. NULL = never corrected. Renderer shows
+    # "(edited)" caption when set.
+    ("corrected_at",
+     "ALTER TABLE messages ADD COLUMN corrected_at REAL"),
 ]
 
 
@@ -146,6 +151,19 @@ class MessageStore:
                  reply_to_id),
             )
             return cur.lastrowid
+
+    def apply_correction(self, target_xmpp_id: str, new_body: str,
+                         corrected_at: float) -> bool:
+        """Replace the body of the message with stanza id
+        ``target_xmpp_id`` and stamp corrected_at. XEP-0308 only allows
+        the original sender to correct, so we don't enforce that here —
+        the wire layer drops mismatched-sender corrections."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE messages SET body=?, corrected_at=? WHERE xmpp_id=?",
+                (new_body, corrected_at, target_xmpp_id),
+            )
+            return cur.rowcount > 0
 
     def set_reactions(self, target_xmpp_id: str, sender_jid: str,
                       emojis: list[str]) -> bool:
@@ -298,7 +316,7 @@ class MessageStore:
             cur.execute("""
                 SELECT id, remote_jid, incoming, body, sender_jid, timestamp,
                        read, attachment_url, xmpp_id, delivery_state,
-                       reactions_json, reply_to_id
+                       reactions_json, reply_to_id, corrected_at
                 FROM   messages
                 WHERE  remote_jid=?
                 ORDER  BY timestamp ASC

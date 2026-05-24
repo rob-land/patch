@@ -29,6 +29,7 @@ class MessagePersister:
         self._xmpp.connect("message-received", self._on_message)
         self._xmpp.connect("message-receipt",  self._on_receipt)
         self._xmpp.connect("reaction-received", self._on_reaction)
+        self._xmpp.connect("message-corrected", self._on_correction)
 
     def _on_message(self, _xmpp, remote_jid, body, incoming, timestamp,
                     attachment_url, message_id, reply_to_id):
@@ -60,4 +61,17 @@ class MessagePersister:
             self._store.set_reactions(target_msg_id, sender_jid, list(emojis))
         except Exception as exc:  # noqa: BLE001
             log.warning("reaction persist failed for %s: %s",
+                        target_msg_id, exc)
+
+    def _on_correction(self, _xmpp, target_msg_id, _conv_jid, new_body,
+                       timestamp):
+        # Group-SMS bodies carry the cheogram "<xmpp:..>" prefix that
+        # parse_group_body strips for normal messages — apply the same
+        # to corrections so the rewritten body stays consistent.
+        if "<xmpp:" in new_body:
+            _, new_body = numfmt.parse_group_body(new_body)
+        try:
+            self._store.apply_correction(target_msg_id, new_body, timestamp)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("correction persist failed for %s: %s",
                         target_msg_id, exc)

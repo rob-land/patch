@@ -89,6 +89,12 @@ class XmppClient(GObject.Object):
         # stanza; the emoji list REPLACES sender_jid's prior set.
         "reaction-received": (GObject.SignalFlags.RUN_FIRST, None,
                               (str, str, str, object)),
+        # XEP-0308: target_msg_id (str — id of the message being
+        # corrected), conv_jid (str), new_body (str), timestamp (float).
+        # Fires when the original sender publishes an edit. Persister
+        # rewrites the row's body and stamps corrected_at.
+        "message-corrected": (GObject.SignalFlags.RUN_FIRST, None,
+                              (str, str, str, float)),
         # XEP-0353 Jingle Message Initiation:
         # action ("propose" | "proceed" | "accept" | "reject" | "retract")
         # session_id (str)
@@ -285,13 +291,19 @@ class XmppClient(GObject.Object):
 
     def send_chat_message(self, to_jid: str, body: str,
                           attachment_url: str = "",
-                          reply_to: dict | None = None) -> bool:
+                          reply_to: dict | None = None,
+                          replace_id: str = "") -> bool:
         """Send a chat message.
 
         ``reply_to`` (XEP-0461 quoted reply) is an optional dict with
         ``target_id`` (the stanza id being replied to) and
         ``target_body`` (the body of that message, used to build the
         plain-text quoted prefix that non-aware clients render).
+
+        ``replace_id`` (XEP-0308 correction) is the stanza id of the
+        original message this one supersedes. Aware clients (and
+        cheogram, within its ~5 min SMS-edit window) replace the
+        original in place; legacy clients see two separate messages.
         """
         if not self._client or not self._client.is_stream_authenticated:
             log.warning("send: not connected")
@@ -311,6 +323,9 @@ class XmppClient(GObject.Object):
                 fallback_end = len(quoted.encode("utf-8"))
         msg = Message(to=to_jid, typ="chat", body=final_body)
         msg.setAttr("id", stanza_id)
+        if replace_id:
+            msg.addChild("replace", namespace=Namespace.CORRECT,
+                         attrs={"id": replace_id})
         if reply_to and reply_to.get("target_id"):
             reply_el = msg.addChild("reply", namespace=Namespace.REPLY,
                                     attrs={"id": reply_to["target_id"]})
@@ -347,6 +362,15 @@ class XmppClient(GObject.Object):
         # Local echo so the conversation list updates immediately. The
         # MAM/carbons round-trip will happen later in flight.
         from time import time as now
+        if replace_id:
+            # A correction REPLACES an existing row; don't append a
+            # new one. Use the conv jid (bare to_jid) for routing.
+            try:
+                conv_jid = str(JID.from_string(to_jid).bare)
+            except Exception:  # noqa: BLE001
+                conv_jid = to_jid
+            self.emit("message-corrected", replace_id, conv_jid, body, now())
+            return True
         # Show only the reply text in the echoed body (the fallback
         # prefix is a wire-format detail for non-aware clients).
         echo_body = body
@@ -679,6 +703,16 @@ class XmppClient(GObject.Object):
                 except Exception:  # noqa: BLE001
                     pass
         msg_id = stanza.getAttr("id") or ""
+
+        # XEP-0308 message correction: this stanza REPLACES an earlier
+        # one with id=replace_id. Skip MAM replay — the live ack landed
+        # first time around, and replaying it would double-apply.
+        replace_el = stanza.getTag("replace", namespace=Namespace.CORRECT)
+        if replace_el is not None and not from_mam:
+            target_id = replace_el.getAttr("id") or ""
+            if target_id:
+                self.emit("message-corrected", target_id, bare, body, timestamp)
+                return
 
         # XEP-0461 quoted reply + XEP-0428 fallback handling. The body
         # text we surface to the UI strips the quoted prefix so the

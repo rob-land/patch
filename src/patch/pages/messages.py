@@ -59,6 +59,11 @@ class PatchMessagesPage(Adw.Bin):
         # send or when the user taps the pill's X.
         self._reply_pending: dict | None = None
         self._reply_pill: Gtk.Widget | None = None
+        # Pending XEP-0308 correction: stanza id of the message being
+        # edited. When set, the next send replaces that row in place
+        # via <replace/> instead of creating a new bubble. Cleared
+        # after send or pill-cancel.
+        self._correction_pending: str = ""
         # Track whether the thread view is currently visible (not just
         # the conversation that was last navigated to). NotificationManager
         # reads `focused_jid()` to decide whether to fire a desktop
@@ -91,6 +96,10 @@ class PatchMessagesPage(Adw.Bin):
         # XEP-0444 reactions: the persister has already written the
         # new set; re-render the open thread so the strip updates.
         self._xmpp.connect("reaction-received", self._on_reaction_received)
+        # XEP-0308 corrections: the persister has rewritten the body;
+        # re-render the open thread so the edited bubble + caption
+        # appear.
+        self._xmpp.connect("message-corrected", self._on_message_corrected)
         # When the contacts index rebuilds, redraw the conversation list
         # so number-only rows pick up the freshly-resolved name.
         if self._contacts is not None:
@@ -205,6 +214,7 @@ class PatchMessagesPage(Adw.Bin):
                 msg, self._contacts,
                 send_reaction=self._send_reaction,
                 start_reply=self._start_reply,
+                start_edit=self._start_edit,
                 by_xmpp_id=by_xmpp_id))
         self._store.mark_read(remote_jid)
         # Refresh the conversations list so unread badges clear.
@@ -222,15 +232,18 @@ class PatchMessagesPage(Adw.Bin):
                 "win.toast",
                 GLib.Variant("s", "Not connected — message not sent"))
             return
-        ok = self._xmpp.send_chat_message(self._open_jid, body,
-                                          reply_to=self._reply_pending)
+        ok = self._xmpp.send_chat_message(
+            self._open_jid, body,
+            reply_to=self._reply_pending,
+            replace_id=self._correction_pending)
         if not ok:
             self.activate_action(
                 "win.toast", GLib.Variant("s", "Send failed"))
             return
         self.compose_entry.set_text("")
-        # Reply consumed — clear the pending state + pill.
+        # Reply / correction consumed — clear the pending state + pill.
         self._clear_reply()
+        self._correction_pending = ""
 
     def _start_reply(self, target_id: str, target_body: str) -> None:
         """Stage a XEP-0461 reply to ``target_id``. Renders a pill
@@ -279,6 +292,17 @@ class PatchMessagesPage(Adw.Bin):
         if self._reply_pill is not None:
             self._reply_pill.unparent()
             self._reply_pill = None
+
+    def _start_edit(self, target_id: str, target_body: str) -> None:
+        """Stage a XEP-0308 correction: load the original body into the
+        compose entry and mark the next send as a replace of
+        ``target_id``. Clears any pending reply so the two modes don't
+        collide on the same send."""
+        self._clear_reply()
+        self._correction_pending = target_id
+        self.compose_entry.set_text(target_body or "")
+        self.compose_entry.grab_focus()
+        self.compose_entry.set_position(-1)
 
     # -- new-conversation flow ------------------------------------------
 
@@ -437,6 +461,11 @@ class PatchMessagesPage(Adw.Bin):
         if self._open_jid == conv_jid:
             self._open_thread(conv_jid)
 
+    def _on_message_corrected(self, _xmpp, _target_id, conv_jid, _new_body, _ts):
+        if self._open_jid == conv_jid:
+            self._open_thread(conv_jid)
+        self._refresh_conversation_list()
+
     def _send_reaction(self, target_id: str, emojis: list[str]) -> None:
         if not self._open_jid:
             return
@@ -483,7 +512,8 @@ class PatchMessagesPage(Adw.Bin):
                 self.thread_list.append(_render_thread_row(
                     msg, self._contacts,
                     send_reaction=self._send_reaction,
-                    start_reply=self._start_reply))
+                    start_reply=self._start_reply,
+                    start_edit=self._start_edit))
             self._store.mark_read(remote_jid)
         self._refresh_conversation_list()
 
@@ -560,6 +590,7 @@ _QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 
 def _render_thread_row(msg: dict, contacts=None,
                        send_reaction=None, start_reply=None,
+                       start_edit=None,
                        by_xmpp_id: dict | None = None) -> Gtk.Widget:
     align = Gtk.Align.START if msg["incoming"] else Gtk.Align.END
 
@@ -643,6 +674,14 @@ def _render_thread_row(msg: dict, contacts=None,
         )
         bubble_box.append(label)
 
+    # XEP-0308 corrected-marker. "(edited)" sits inline with the
+    # delivery indicator below the bubble body.
+    if msg.get("corrected_at"):
+        edited = Gtk.Label(label="(edited)", xalign=1, halign=Gtk.Align.END)
+        edited.add_css_class("caption")
+        edited.add_css_class("dim-label")
+        bubble_box.append(edited)
+
     # Outgoing delivery indicator (XEP-0184 receipts). Classic SMS-app
     # convention: ✓ = sent (server-acked), ✓✓ = delivered (peer ack).
     # No indicator for inbound or for old rows that predate receipts.
@@ -661,14 +700,19 @@ def _render_thread_row(msg: dict, contacts=None,
     if reactions_strip is not None:
         bubble_box.append(reactions_strip)
 
-    # Right-click / long-press → reaction + reply popover. Only attach
-    # when we have a stanza id to target.
+    # Right-click / long-press → reaction + reply + edit popover. Only
+    # attach when we have a stanza id to target. Edit is restricted to
+    # own (outgoing) bubbles — XEP-0308 only lets the original sender
+    # correct.
     target_id = msg.get("xmpp_id") or ""
-    if target_id and (send_reaction is not None or start_reply is not None):
+    if target_id and (send_reaction is not None
+                      or start_reply is not None
+                      or start_edit is not None):
         _attach_message_menu(bubble_box, target_id,
                              msg.get("body") or "",
                              send_reaction=send_reaction,
-                             start_reply=start_reply)
+                             start_reply=start_reply,
+                             start_edit=start_edit if not msg["incoming"] else None)
 
     row = Gtk.ListBoxRow(selectable=False, activatable=False)
     if sender_label is not None:
@@ -715,7 +759,8 @@ def _build_reactions_strip(msg: dict) -> Gtk.Widget | None:
 
 def _attach_message_menu(widget: Gtk.Widget, target_id: str,
                          target_body: str,
-                         send_reaction=None, start_reply=None) -> None:
+                         send_reaction=None, start_reply=None,
+                         start_edit=None) -> None:
     """Wire long-press + right-click on ``widget`` to a popover with
     the XEP-0444 quick-emoji row and an XEP-0461 "Reply" action.
 
@@ -750,6 +795,14 @@ def _attach_message_menu(widget: Gtk.Widget, target_id: str,
             popover.popdown()
         reply_btn.connect("clicked", _on_reply)
         column.append(reply_btn)
+    if start_edit is not None:
+        edit_btn = Gtk.Button(label="Edit")
+        edit_btn.add_css_class("flat")
+        def _on_edit(_b):
+            start_edit(target_id, target_body)
+            popover.popdown()
+        edit_btn.connect("clicked", _on_edit)
+        column.append(edit_btn)
     popover.set_child(column)
 
     long_press = Gtk.GestureLongPress.new()
