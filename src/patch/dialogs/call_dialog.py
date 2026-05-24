@@ -16,13 +16,15 @@ log = logging.getLogger(__name__)
 class PatchCallDialog(Adw.Dialog):
     __gtype_name__ = "PatchCallDialog"
 
-    header_title:   Adw.WindowTitle = Gtk.Template.Child()
-    peer_label:     Gtk.Label       = Gtk.Template.Child()
-    state_label:    Gtk.Label       = Gtk.Template.Child()
-    accept_button:  Gtk.Button      = Gtk.Template.Child()
-    reject_button:  Gtk.Button      = Gtk.Template.Child()
-    hangup_button:  Gtk.Button      = Gtk.Template.Child()
-    dtmf_pad:       Gtk.Grid        = Gtk.Template.Child()
+    header_title:   Adw.WindowTitle  = Gtk.Template.Child()
+    peer_label:     Gtk.Label        = Gtk.Template.Child()
+    state_label:    Gtk.Label        = Gtk.Template.Child()
+    accept_button:  Gtk.Button       = Gtk.Template.Child()
+    reject_button:  Gtk.Button       = Gtk.Template.Child()
+    hangup_button:  Gtk.Button       = Gtk.Template.Child()
+    dtmf_pad:       Gtk.Grid         = Gtk.Template.Child()
+    in_call_controls: Gtk.Box        = Gtk.Template.Child()
+    mute_button:    Gtk.ToggleButton = Gtk.Template.Child()
 
     def __init__(self, manager, session):
         super().__init__()
@@ -54,6 +56,7 @@ class PatchCallDialog(Adw.Dialog):
         self.accept_button.connect("clicked", lambda *_: self._manager.accept_incoming())
         self.reject_button.connect("clicked", lambda *_: self._manager.reject_incoming())
         self.hangup_button.connect("clicked", lambda *_: self._on_hangup())
+        self.mute_button.connect("toggled", self._on_mute_toggled)
 
     def _on_dtmf(self, _action, param):
         digit = param.get_string()
@@ -84,6 +87,7 @@ class PatchCallDialog(Adw.Dialog):
         self.hangup_button.set_visible(active or proposing)
         # Touch-tone dialpad only makes sense while a call is live.
         self.dtmf_pad.set_visible(active)
+        self.in_call_controls.set_visible(active)
         # The header has no close button — let the user dismiss only
         # after the session is terminal.
         self.set_can_close(sess.is_terminal)
@@ -134,3 +138,6 @@ class PatchCallDialog(Adw.Dialog):
             self._manager.retract_outgoing()
         else:
             self._manager.hangup()
+
+    def _on_mute_toggled(self, button):
+        self._manager.set_mic_mute(button.get_active())

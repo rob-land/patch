@@ -76,6 +76,24 @@ template $PatchCallDialog: Adw.Dialog {
         Gtk.Button { label: "#"; action-name: "patch.dtmf"; action-target: "\"#\""; styles ["circular"] layout { column: 2; row: 3; }}
       }
 
+      // In-call controls: mute the mic. Only visible while the call
+      // is active. Speakerphone routing requires WirePlumber node-
+      // target manipulation that's not wired up yet — out of scope
+      // for this control row.
+      Gtk.Box in_call_controls {
+        orientation: horizontal;
+        spacing: 16;
+        homogeneous: true;
+        halign: center;
+        visible: false;
+
+        Gtk.ToggleButton mute_button {
+          icon-name: "microphone-sensitivity-muted-symbolic";
+          tooltip-text: _("Mute microphone");
+          styles ["circular"]
+        }
+      }
+
       Gtk.Box {
         orientation: vertical;
         spacing: 4;

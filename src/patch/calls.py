@@ -123,6 +123,16 @@ class CallManager(GObject.Object):
         # Fire the signal before sending the stanza so the UI has a chance
         # to show 'connecting…' while the propose is in flight.
         self.emit("call-started", sess, "outgoing")
+        # Pre-warm the Jingle session: build the audio engine + start ICE
+        # gathering during the JMI propose -> proceed round-trip. When
+        # proceed arrives, create_offer runs against an already-ready
+        # engine instead of waiting for TURN disco + webrtcbin setup.
+        own_jid_full = self._own_full_jid()
+        self._jingle = JingleSession(
+            self._xmpp, sid=session_id,
+            peer_jid=peer_jid, own_jid=own_jid_full,
+            incoming=False)
+        self._jingle.prewarm()
         ok = self._xmpp.send_jmi("propose", session_id, peer_jid)
         if not ok:
             self._transition(sess, STATE_ENDED)
@@ -191,6 +201,12 @@ class CallManager(GObject.Object):
             return False
         return self._jingle.send_dtmf(digit)
 
+    def set_mic_mute(self, muted: bool) -> None:
+        """Mute/unmute the local mic on the active call. No-op if no call."""
+        if self._jingle is None:
+            return
+        self._jingle.set_mic_mute(muted)
+
     # -- inbound from XmppClient ----------------------------------------
 
     def _on_jmi(self, _xmpp, action, session_id, peer_jid, incoming):
@@ -244,15 +260,16 @@ class CallManager(GObject.Object):
     # -- Jingle audio orchestration -------------------------------------
 
     def _begin_jingle_outgoing(self, sess: CallSession) -> None:
-        if self._jingle is not None:
-            return
-        # The peer in JMI propose was the bare gateway JID. For the
-        # actual Jingle session we use the same.
-        own_jid_full = self._own_full_jid()
-        self._jingle = JingleSession(
-            self._xmpp, sid=sess.session_id,
-            peer_jid=sess.peer_jid, own_jid=own_jid_full,
-            incoming=False)
+        # In the normal flow start_outgoing has already pre-warmed a
+        # JingleSession with the right sid + peer; here we just fire the
+        # session-initiate against that warm engine. Recreate only as a
+        # defensive fallback (e.g. session swapped out by a race).
+        if self._jingle is None or self._jingle.sid != sess.session_id:
+            own_jid_full = self._own_full_jid()
+            self._jingle = JingleSession(
+                self._xmpp, sid=sess.session_id,
+                peer_jid=sess.peer_jid, own_jid=own_jid_full,
+                incoming=False)
         self._jingle.start_outgoing()
 
     def _begin_jingle_incoming(self, sess: CallSession) -> None:
@@ -263,12 +280,18 @@ class CallManager(GObject.Object):
             self._xmpp, sid=sess.session_id,
             peer_jid=sess.peer_jid, own_jid=own_jid_full,
             incoming=True)
+        # Start engine + ICE gathering now so they overlap with the
+        # peer's JMI proceed -> session-initiate round-trip. When the
+        # session-initiate arrives the engine is ready and we can fire
+        # session-accept immediately instead of waiting for TURN +
+        # webrtcbin setup.
+        self._jingle.prewarm()
         if self._pending_initiate is not None:
             self._jingle.start_incoming(self._pending_initiate)
             self._pending_initiate = None
-        # Otherwise: nothing to do yet. _on_jingle_iq routes the peer's
-        # session-initiate to JingleSession.start_incoming when it
-        # arrives. The engine is built lazily on first use.
+        # Otherwise: _on_jingle_iq routes the peer's session-initiate
+        # to JingleSession.start_incoming when it arrives — by then
+        # the engine is warm from the prewarm call above.
 
     def _on_jingle_iq(self, _xmpp, parsed, from_jid, _iq_id):
         action = parsed.get("action")

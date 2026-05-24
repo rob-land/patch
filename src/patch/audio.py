@@ -57,24 +57,44 @@ def _ensure_gst() -> bool:
 # Pipeline
 # ──────────────────────────────────────────────────────────────────────
 
-def _build_webrtcbin(turn_uri: str | None = None) -> Gst.Element:
+def _call_stream_properties() -> Gst.Structure:
+    """Stream-property hints that label our pulsesrc/pulsesink as a phone
+    call, so WirePlumber/PipeWire applies the communication routing
+    profile (earpiece-preferred on mobile, HSP over A2DP for Bluetooth,
+    AEC enabled, ducking of music/notification streams). This is the
+    Linux equivalent of Android's ``AudioManager.MODE_IN_COMMUNICATION``
+    that Cheogram Android sets at call accept.
+
+    Built via ``from_string`` because PA property keys contain dots,
+    which GstStructure's structured-field setters don't always accept;
+    the string parser does."""
+    return Gst.Structure.from_string(
+        'props,media.role=phone,media.name="Patch call"')[0]
+
+
+def _build_webrtcbin(turn_uris: list[str] | None = None) -> Gst.Element:
     """Construct the webrtcbin element by hand.
 
     NOTE: We used to do this via Gst.parse_launch("webrtcbin name=...
     ...") but parse_launch returns the inner element directly when the
     description has only one element — there's no enclosing GstPipeline
     to call get_by_name on. Build the pipeline explicitly.
+
+    ``turn_uris`` is an ordered list (UDP → TCP → TURNS). The first
+    goes into the convenience ``turn-server`` property; any extras are
+    pushed via the ``add-turn-server`` action signal. ICE relay-probes
+    all of them so a network blocking UDP/3478 still gets connectivity
+    via the TCP fallback.
     """
     el = Gst.ElementFactory.make("webrtcbin", "webrtcbin")
     if el is None:
         raise RuntimeError("webrtcbin factory missing")
     el.set_property("bundle-policy", 3)  # max-bundle
     el.set_property("stun-server", "stun://stun.l.google.com:19302")
-    if turn_uri:
-        # webrtcbin accepts turn-server=turn://user:cred@host:port for a
-        # single TURN. chat.rob.land's coturn presents UDP at this host,
-        # which is enough for the basic case.
-        el.set_property("turn-server", turn_uri)
+    if turn_uris:
+        el.set_property("turn-server", turn_uris[0])
+        for extra in turn_uris[1:]:
+            el.emit("add-turn-server", extra)
     return el
 
 
@@ -283,13 +303,13 @@ class AudioEngine(GObject.Object):
         "ice-state-change": (GObject.SignalFlags.RUN_FIRST, None, (int,)),
     }
 
-    def __init__(self, turn_uri: str | None = None):
+    def __init__(self, turn_uris: list[str] | None = None):
         super().__init__()
         self._pipeline: Gst.Pipeline | None = None
         self._webrtc:   Gst.Element  | None = None
         self._funnel:   Gst.Element  | None = None
         self._dtmf_src: Gst.Element  | None = None
-        self._turn_uri = turn_uri
+        self._turn_uris = list(turn_uris or [])
         self._stats_source: int = 0
 
     def start(self, direction: str) -> bool:
@@ -299,7 +319,7 @@ class AudioEngine(GObject.Object):
         if self._pipeline is not None:
             return True
         try:
-            self._webrtc = _build_webrtcbin(self._turn_uri)
+            self._webrtc = _build_webrtcbin(self._turn_uris)
         except (GLib.Error, RuntimeError) as exc:
             log.warning("failed to build webrtcbin: %s", exc)
             return False
@@ -331,7 +351,11 @@ class AudioEngine(GObject.Object):
             # pulsesrc is intrinsically a live source — it has no
             # is-live property to set (that's audiotestsrc's). Don't
             # pass kwargs here; the live behaviour is baked in.
-            src      = _make("pulsesrc",     "mic_src")
+            # stream-properties tags the PA/PipeWire stream as a phone
+            # call so the system applies the communication routing
+            # profile (see _call_stream_properties for details).
+            src      = _make("pulsesrc",     "mic_src",
+                             stream_properties=_call_stream_properties())
             convert  = _make("audioconvert", "mic_conv")
             resample = _make("audioresample","mic_res")
             capsf    = _make("capsfilter",   "mic_caps",
@@ -490,6 +514,21 @@ class AudioEngine(GObject.Object):
         "A": 12, "B": 13, "C": 14, "D": 15,
     }
 
+    def set_mic_mute(self, muted: bool) -> None:
+        """Mute/unmute the mic by toggling pulsesrc's mute property.
+
+        Cheaper than start/stopping the source — pulsesrc keeps the
+        stream open with silence, so PipeWire doesn't tear down the
+        route or renegotiate AEC mid-call.
+        """
+        if self._pipeline is None:
+            return
+        src = self._pipeline.get_by_name("mic_src")
+        if src is None:
+            return
+        src.set_property("mute", bool(muted))
+        log.info("mic mute = %s", muted)
+
     def send_dtmf(self, digit: str, duration_ms: int = 200) -> bool:
         """Send a single RFC 4733 DTMF tone via the rtpdtmfsrc element.
 
@@ -581,6 +620,8 @@ class AudioEngine(GObject.Object):
                 return
             self._pipeline.add(el)
             el.sync_state_with_parent()
+        # Same role tagging as the mic side — see _call_stream_properties.
+        sink.set_property("stream-properties", _call_stream_properties())
         for a, b in ((depay, decoder), (decoder, convert),
                      (convert, resample), (resample, sink)):
             if not a.link(b):

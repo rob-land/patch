@@ -22,14 +22,18 @@ log = logging.getLogger(__name__)
 NS_EXTSERVICE = "urn:xmpp:extdisco:2"
 
 
-def fetch_turn_uri(xmpp_client, server_jid: str, callback) -> None:
-    """Send the disco IQ, call callback(uri | None) when the result arrives."""
+def fetch_turn_uris(xmpp_client, server_jid: str, callback) -> None:
+    """Send the disco IQ, call callback(list[str]) with all advertised
+    TURN URIs (UDP first, TCP next, TURNS last) — empty list on failure
+    or no services. Feeding webrtcbin multiple TURN servers (via
+    add-turn-server) lets ICE relay-probe both UDP and TCP transports
+    so a network that blocks UDP/3478 still gets through on TCP."""
     iq = Iq(typ="get", to=server_jid)
     iq.addChild("services", namespace=NS_EXTSERVICE,
                 attrs={"type": "turn"})
     nbx = xmpp_client._client      # noqa: SLF001 — internal access ok
     if nbx is None:
-        callback(None)
+        callback([])
         return
 
     # nbxmpp dispatches iq-response callbacks as
@@ -37,35 +41,35 @@ def fetch_turn_uri(xmpp_client, server_jid: str, callback) -> None:
     # — earlier this module used a one-arg signature which raised
     # TypeError inside nbxmpp's dispatcher (caught + swallowed by
     # its except-Exception clause), so the callback never reached
-    # _on_turn_resolved and the audio engine never started. The
-    # visible symptom in the log was 'transport-info: 0 added, N
-    # pending' followed by peer-terminated 10s later.
+    # _on_turn_resolved and the audio engine never started.
     def _on_response(_client, response, **_kw):
         if response is None:
             log.warning("turn disco timed out")
-            callback(None)
+            callback([])
             return
         try:
-            uri = _extract_first_turn(response)
+            uris = _extract_turn_uris(response)
         except Exception as exc:  # noqa: BLE001
             log.warning("turn disco parse failed: %s", exc)
-            uri = None
-        callback(uri)
+            uris = []
+        callback(uris)
 
     try:
         nbx.SendAndCallForResponse(iq, _on_response)
     except Exception as exc:  # noqa: BLE001
         log.warning("turn disco send failed: %s", exc)
-        callback(None)
+        callback([])
 
 
-def _extract_first_turn(response) -> str | None:
+def _extract_turn_uris(response) -> list[str]:
     services = response.getTag("services", namespace=NS_EXTSERVICE)
     if services is None:
         # XEP-0215 v1 (urn:xmpp:extdisco:1) is the older spelling. Try it.
         services = response.getTag("services", namespace="urn:xmpp:extdisco:1")
     if services is None:
-        return None
+        return []
+    # Buckets so we can order UDP → TCP → TURNS regardless of disco order.
+    by_transport: dict[str, list[str]] = {"udp": [], "tcp": [], "turns": []}
     for svc in services.getTags("service"):
         if svc.getAttr("type") not in ("turn", "turns"):
             continue
@@ -73,7 +77,7 @@ def _extract_first_turn(response) -> str | None:
         port = svc.getAttr("port") or "3478"
         username = svc.getAttr("username") or ""
         password = svc.getAttr("password") or ""
-        transport = svc.getAttr("transport") or "udp"
+        transport = (svc.getAttr("transport") or "udp").lower()
         if not host:
             continue
         scheme = "turns" if svc.getAttr("type") == "turns" else "turn"
@@ -83,7 +87,8 @@ def _extract_first_turn(response) -> str | None:
         # webrtcbin's turn-server URI is `turn://[user:pass@]host:port`
         # — the transport is appended as ?transport=tcp if needed.
         uri = f"{scheme}://{creds}{host}:{port}"
-        if transport.lower() != "udp":
-            uri += f"?transport={transport.lower()}"
-        return uri
-    return None
+        if transport != "udp":
+            uri += f"?transport={transport}"
+        bucket = "turns" if scheme == "turns" else transport
+        by_transport.setdefault(bucket, []).append(uri)
+    return by_transport["udp"] + by_transport["tcp"] + by_transport["turns"]

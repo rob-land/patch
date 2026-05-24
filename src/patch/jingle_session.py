@@ -32,7 +32,6 @@ from gi.repository import GObject
 
 from patch.audio import AudioEngine, sdp_to_jingle_description, jingle_content_to_sdp
 from patch.xmpp import jingle as jingle_mod
-from patch.xmpp.turn import fetch_turn_uri
 
 log = logging.getLogger(__name__)
 
@@ -55,8 +54,30 @@ class JingleSession(GObject.Object):
         # has settled — webrtcbin requires the remote desc first.
         self._pending_remote_candidates: list[str] = []
         self._remote_desc_set = False
+        # Buffered LOCAL candidates emitted by webrtcbin during pre-warm,
+        # before our session-initiate / session-accept has been sent.
+        # They can't be transport-info'd yet because the peer doesn't
+        # know the session — and they'd carry empty ufrag/pwd anyway.
+        # Flushed by _flush_pending_local once we have our local SDP.
+        self._pending_local_candidates: list[str] = []
+        self._local_sdp_sent = False
         # Deferred work that needs to run AFTER the engine is built.
         self._on_engine_ready: list = []
+
+    # -- pre-warm -------------------------------------------------------
+
+    def prewarm(self) -> None:
+        """Build the audio engine ahead of needing it.
+
+        Triggers TURN discovery (cache hit on a warm XmppClient), then
+        builds webrtcbin and starts ICE gathering. Called as soon as we
+        commit to a call attempt (JMI propose sent for outgoing, JMI
+        accept clicked for incoming) so the engine setup overlaps with
+        the JMI round-trip rather than running serially after it. The
+        Cheogram Android client gets a similar win via its PRE_APPROVED
+        pipelining.
+        """
+        self._with_engine(lambda: None)
 
     # -- outgoing flow --------------------------------------------------
 
@@ -84,6 +105,9 @@ class JingleSession(GObject.Object):
             **kw,
         )
         self._xmpp.send_iq(iq)
+        # Now that ufrag/pwd/fp are stamped on the session, any candidates
+        # that arrived during pre-warm are safe to trickle.
+        self._flush_pending_local()
 
     # -- incoming flow --------------------------------------------------
 
@@ -128,6 +152,9 @@ class JingleSession(GObject.Object):
             **kw,
         )
         self._xmpp.send_iq(iq)
+        # Same as session-initiate path: pre-warm-gathered candidates
+        # are now safe to trickle now that the peer has our ufrag/pwd.
+        self._flush_pending_local()
 
     # -- inbound stanzas from the peer ---------------------------------
 
@@ -190,9 +217,25 @@ class JingleSession(GObject.Object):
             return False
         return self.engine.send_dtmf(digit)
 
+    def set_mic_mute(self, muted: bool) -> None:
+        if self.engine is None:
+            return
+        self.engine.set_mic_mute(muted)
+
     # -- candidate trickle ---------------------------------------------
 
     def _on_local_candidate(self, _engine, sdp_line: str):
+        # While pre-warming we'll often gather candidates before we've
+        # had a chance to send session-initiate / session-accept. The
+        # peer doesn't know the session yet, and our ufrag/pwd/fp
+        # aren't extracted from local SDP until the offer/answer fires.
+        # Buffer here and flush from _flush_pending_local.
+        if not self._local_sdp_sent:
+            self._pending_local_candidates.append(sdp_line)
+            return
+        self._send_trickle_candidate(sdp_line)
+
+    def _send_trickle_candidate(self, sdp_line: str) -> None:
         cand = jingle_mod.sdp_candidate_to_jingle(sdp_line)
         if cand is None:
             return
@@ -207,6 +250,12 @@ class JingleSession(GObject.Object):
             dtls_hash=getattr(self, "_local_dtls_hash", "sha-256"),
             dtls_setup=getattr(self, "_local_dtls_setup", ""))
         self._xmpp.send_iq(iq)
+
+    def _flush_pending_local(self) -> None:
+        self._local_sdp_sent = True
+        for line in self._pending_local_candidates:
+            self._send_trickle_candidate(line)
+        self._pending_local_candidates.clear()
 
     # -- engine lifecycle (TURN-aware) ---------------------------------
 
@@ -225,14 +274,17 @@ class JingleSession(GObject.Object):
             # Engine build is in flight from a prior call — work will
             # run once it's ready.
             return
-        # Kick off TURN discovery against the server's domain.
-        server = self.own_jid.split("/", 1)[0].split("@", 1)[-1] or "rob.land"
-        fetch_turn_uri(self._xmpp, server, self._on_turn_resolved)
+        # XmppClient pre-fetches the TURN URIs on login and caches them
+        # for ~30 min, so this is usually a synchronous hit. Falls back
+        # to a fresh disco IQ when the cache is empty or expired. The
+        # list carries UDP/TCP/TURNS in preference order so ICE can
+        # relay via TCP when UDP/3478 is blocked.
+        self._xmpp.get_turn_uris(self._on_turn_resolved)
 
-    def _on_turn_resolved(self, turn_uri):
-        log.info("TURN URI for engine: %s",
-                 turn_uri if turn_uri else "(none — relying on STUN only)")
-        self.engine = AudioEngine(turn_uri=turn_uri)
+    def _on_turn_resolved(self, turn_uris):
+        log.info("TURN URIs for engine: %s",
+                 turn_uris if turn_uris else "(none — relying on STUN only)")
+        self.engine = AudioEngine(turn_uris=turn_uris)
         self.engine.connect("local-candidate", self._on_local_candidate)
         if not self.engine.start(
                 "incoming" if self.incoming else "outgoing"):
