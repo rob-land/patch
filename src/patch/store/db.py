@@ -71,6 +71,12 @@ _MIGRATIONS = [
     # than keeping a normalised reactions table.
     ("reactions_json",
      "ALTER TABLE messages ADD COLUMN reactions_json TEXT"),
+    # XEP-0461 quoted reply: xmpp_id of the message this one is
+    # replying to. Look up reply_to_id → messages.xmpp_id at render
+    # time so a re-edited / corrected original surfaces the latest
+    # body. NULL on messages that aren't a reply.
+    ("reply_to_id",
+     "ALTER TABLE messages ADD COLUMN reply_to_id TEXT"),
 ]
 
 
@@ -111,7 +117,8 @@ class MessageStore:
                     timestamp: float, sender_jid: Optional[str] = None,
                     attachment_url: Optional[str] = None,
                     xmpp_id: Optional[str] = None,
-                    delivery_state: Optional[str] = None) -> int:
+                    delivery_state: Optional[str] = None,
+                    reply_to_id: Optional[str] = None) -> int:
         # Dedup: MAM catch-up after a brief disconnect can replay a
         # message we already had via the live stream (or the local-echo
         # path for outbound). Same conversation, same body, timestamp
@@ -132,10 +139,11 @@ class MessageStore:
             cur.execute(
                 "INSERT INTO messages "
                 "(remote_jid, incoming, body, sender_jid, timestamp, "
-                "attachment_url, xmpp_id, delivery_state) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "attachment_url, xmpp_id, delivery_state, reply_to_id) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (remote_jid, 1 if incoming else 0, body, sender_jid,
-                 timestamp, attachment_url, xmpp_id, delivery_state),
+                 timestamp, attachment_url, xmpp_id, delivery_state,
+                 reply_to_id),
             )
             return cur.lastrowid
 
@@ -280,12 +288,17 @@ class MessageStore:
             return [dict(r) for r in cur.fetchall()]
 
     def thread(self, remote_jid: str, limit: int = 200) -> list[dict]:
-        """Return messages for a conversation, oldest first."""
+        """Return messages for a conversation, oldest first.
+
+        Reply targets are surfaced via reply_to_id; the renderer joins
+        back through a small in-memory by-xmpp-id map keyed off the
+        same result set to find the quoted body.
+        """
         with self._cursor() as cur:
             cur.execute("""
                 SELECT id, remote_jid, incoming, body, sender_jid, timestamp,
                        read, attachment_url, xmpp_id, delivery_state,
-                       reactions_json
+                       reactions_json, reply_to_id
                 FROM   messages
                 WHERE  remote_jid=?
                 ORDER  BY timestamp ASC

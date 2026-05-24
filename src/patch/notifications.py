@@ -70,7 +70,7 @@ class NotificationManager:
     # -- handlers --------------------------------------------------------
 
     def _on_message(self, _xmpp, remote_jid, body, incoming, _timestamp,
-                    _attachment_url, _message_id):
+                    _attachment_url, _message_id, _reply_to_id):
         if not incoming:
             return
         if not body:

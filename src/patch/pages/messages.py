@@ -52,6 +52,13 @@ class PatchMessagesPage(Adw.Bin):
         self._contacts = contacts
         self._avatars = avatars
         self._open_jid: str | None = None
+        # Pending XEP-0461 quoted-reply state. When set, the next
+        # send_chat_message includes <reply id=..> + a quoted prefix,
+        # and the compose area renders a small dismissable pill above
+        # the entry showing what's being replied to. Cleared after
+        # send or when the user taps the pill's X.
+        self._reply_pending: dict | None = None
+        self._reply_pill: Gtk.Widget | None = None
         # Track whether the thread view is currently visible (not just
         # the conversation that was last navigated to). NotificationManager
         # reads `focused_jid()` to decide whether to fire a desktop
@@ -188,9 +195,17 @@ class PatchMessagesPage(Adw.Bin):
             if child is None:
                 break
             self.thread_list.remove(child)
-        for msg in self._store.thread(remote_jid):
+        rows = self._store.thread(remote_jid)
+        # XEP-0461 quote resolution: build a {xmpp_id: row} lookup
+        # for this thread so a reply bubble can show the snippet of
+        # the message it's replying to.
+        by_xmpp_id = {r["xmpp_id"]: r for r in rows if r.get("xmpp_id")}
+        for msg in rows:
             self.thread_list.append(_render_thread_row(
-                msg, self._contacts, send_reaction=self._send_reaction))
+                msg, self._contacts,
+                send_reaction=self._send_reaction,
+                start_reply=self._start_reply,
+                by_xmpp_id=by_xmpp_id))
         self._store.mark_read(remote_jid)
         # Refresh the conversations list so unread badges clear.
         self._refresh_conversation_list()
@@ -207,12 +222,63 @@ class PatchMessagesPage(Adw.Bin):
                 "win.toast",
                 GLib.Variant("s", "Not connected — message not sent"))
             return
-        ok = self._xmpp.send_chat_message(self._open_jid, body)
+        ok = self._xmpp.send_chat_message(self._open_jid, body,
+                                          reply_to=self._reply_pending)
         if not ok:
             self.activate_action(
                 "win.toast", GLib.Variant("s", "Send failed"))
             return
         self.compose_entry.set_text("")
+        # Reply consumed — clear the pending state + pill.
+        self._clear_reply()
+
+    def _start_reply(self, target_id: str, target_body: str) -> None:
+        """Stage a XEP-0461 reply to ``target_id``. Renders a pill
+        above the compose entry so the user knows the next send will
+        carry the quote."""
+        self._reply_pending = {
+            "target_id": target_id,
+            "target_body": target_body,
+            "target_jid": self._open_jid,
+        }
+        # Replace any prior pill (user might be re-targeting).
+        if self._reply_pill is not None:
+            self._reply_pill.unparent()
+            self._reply_pill = None
+        snippet = (target_body or "").strip().splitlines()[0:1]
+        snippet = snippet[0] if snippet else ""
+        if len(snippet) > 60:
+            snippet = snippet[:59] + "…"
+        pill = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        pill.set_margin_start(8); pill.set_margin_end(8)
+        pill.set_margin_top(4); pill.set_margin_bottom(2)
+        label = Gtk.Label(label=f"↪ Replying to: {snippet}", xalign=0,
+                          ellipsize=3)
+        label.set_hexpand(True)
+        label.add_css_class("caption")
+        label.add_css_class("dim-label")
+        pill.append(label)
+        cancel = Gtk.Button(icon_name="window-close-symbolic")
+        cancel.add_css_class("flat")
+        cancel.connect("clicked", lambda *_: self._clear_reply())
+        pill.append(cancel)
+        # Insert just above the compose entry. compose_entry sits in a
+        # horizontal row inside the thread page's vertical content box;
+        # we splice the pill into that vertical box as the sibling
+        # immediately before the compose row.
+        compose_row = self.compose_entry.get_parent()
+        if compose_row is not None:
+            parent = compose_row.get_parent()
+            if parent is not None:
+                parent.insert_child_after(pill, compose_row.get_prev_sibling())
+        self._reply_pill = pill
+        self.compose_entry.grab_focus()
+
+    def _clear_reply(self) -> None:
+        self._reply_pending = None
+        if self._reply_pill is not None:
+            self._reply_pill.unparent()
+            self._reply_pill = None
 
     # -- new-conversation flow ------------------------------------------
 
@@ -387,29 +453,37 @@ class PatchMessagesPage(Adw.Bin):
             self._open_thread(self._open_jid)
 
     def _on_message_received(self, _xmpp, remote_jid, body, incoming, timestamp,
-                             attachment_url, message_id):
+                             attachment_url, message_id, reply_to_id):
         # The MessagePersister (app-level, always alive) writes to the
         # store regardless of whether this page exists. Here we only do
-        # view-side work — split the group-SMS body so the thread row
-        # renders the inline sender, and refresh the conversation list.
-        sender_jid = None
-        if numfmt.is_group_jid(remote_jid):
-            sender_jid, body = numfmt.parse_group_body(body)
+        # view-side work — for an open thread we either re-render so the
+        # reply quote snippet resolves correctly, or append the new row
+        # in-place when there's no reply to look up.
         if self._open_jid == remote_jid:
-            # Append directly to the visible thread without a full refetch.
-            msg = {
-                "remote_jid":     remote_jid,
-                "incoming":       bool(incoming),
-                "body":           body,
-                "sender_jid":     sender_jid,
-                "timestamp":      timestamp,
-                "read":           1,
-                "attachment_url": attachment_url or None,
-                "xmpp_id":        message_id if not incoming else None,
-                "delivery_state": "sent" if not incoming else None,
-            }
-            self.thread_list.append(_render_thread_row(
-                msg, self._contacts, send_reaction=self._send_reaction))
+            if reply_to_id:
+                # The replied-to row needs to be in the in-memory map
+                # we hand to the renderer — a full reopen does that.
+                self._open_thread(remote_jid)
+            else:
+                sender_jid = None
+                if numfmt.is_group_jid(remote_jid):
+                    sender_jid, body = numfmt.parse_group_body(body)
+                msg = {
+                    "remote_jid":     remote_jid,
+                    "incoming":       bool(incoming),
+                    "body":           body,
+                    "sender_jid":     sender_jid,
+                    "timestamp":      timestamp,
+                    "read":           1,
+                    "attachment_url": attachment_url or None,
+                    "xmpp_id":        message_id or None,
+                    "delivery_state": "sent" if not incoming else None,
+                    "reply_to_id":    None,
+                }
+                self.thread_list.append(_render_thread_row(
+                    msg, self._contacts,
+                    send_reaction=self._send_reaction,
+                    start_reply=self._start_reply))
             self._store.mark_read(remote_jid)
         self._refresh_conversation_list()
 
@@ -485,7 +559,8 @@ _QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 
 
 def _render_thread_row(msg: dict, contacts=None,
-                       send_reaction=None) -> Gtk.Widget:
+                       send_reaction=None, start_reply=None,
+                       by_xmpp_id: dict | None = None) -> Gtk.Widget:
     align = Gtk.Align.START if msg["incoming"] else Gtk.Align.END
 
     # For group-SMS messages we know the per-message sender JID; render
@@ -518,6 +593,26 @@ def _render_thread_row(msg: dict, contacts=None,
     bubble_box.add_css_class("patch-bubble")
     bubble_box.add_css_class(
         "patch-bubble-incoming" if msg["incoming"] else "patch-bubble-outgoing")
+
+    # XEP-0461 quote header: if this row replies to a known prior
+    # message in the same thread, render a compact preview of the
+    # quoted text above the body. Falls through silently when the
+    # target isn't in the by_xmpp_id map (e.g. cross-thread reply,
+    # MAM gap, etc.).
+    reply_to_id = msg.get("reply_to_id")
+    if reply_to_id and by_xmpp_id is not None:
+        target = by_xmpp_id.get(reply_to_id)
+        if target:
+            target_body = (target.get("body") or "").strip().splitlines()
+            snippet = target_body[0] if target_body else ""
+            if len(snippet) > 80:
+                snippet = snippet[:79] + "…"
+            quote = Gtk.Label(label=f"↪ {snippet}",
+                              xalign=0 if msg["incoming"] else 1,
+                              wrap=False, ellipsize=3)
+            quote.add_css_class("caption")
+            quote.add_css_class("dim-label")
+            bubble_box.append(quote)
 
     # If there's an image attachment, render the picture above the body
     # text. Loading is async via Soup3 — the placeholder shows the URL
@@ -566,11 +661,14 @@ def _render_thread_row(msg: dict, contacts=None,
     if reactions_strip is not None:
         bubble_box.append(reactions_strip)
 
-    # Right-click / long-press → reaction popover. Only attach when we
-    # have a send callback AND a stanza id to target.
+    # Right-click / long-press → reaction + reply popover. Only attach
+    # when we have a stanza id to target.
     target_id = msg.get("xmpp_id") or ""
-    if send_reaction is not None and target_id:
-        _attach_reaction_menu(bubble_box, target_id, send_reaction)
+    if target_id and (send_reaction is not None or start_reply is not None):
+        _attach_message_menu(bubble_box, target_id,
+                             msg.get("body") or "",
+                             send_reaction=send_reaction,
+                             start_reply=start_reply)
 
     row = Gtk.ListBoxRow(selectable=False, activatable=False)
     if sender_label is not None:
@@ -615,42 +713,52 @@ def _build_reactions_strip(msg: dict) -> Gtk.Widget | None:
     return strip
 
 
-def _attach_reaction_menu(widget: Gtk.Widget, target_id: str,
-                          send_reaction) -> None:
-    """Wire a long-press + right-click handler onto ``widget`` that
-    pops up the quick-react emoji picker. ``send_reaction`` is invoked
-    as ``send_reaction(target_id, [emoji])`` — the wire format wants
-    the FULL set, so toggling state across reacts would need a model;
-    we ship the simple "tap an emoji to add it" semantic here."""
+def _attach_message_menu(widget: Gtk.Widget, target_id: str,
+                         target_body: str,
+                         send_reaction=None, start_reply=None) -> None:
+    """Wire long-press + right-click on ``widget`` to a popover with
+    the XEP-0444 quick-emoji row and an XEP-0461 "Reply" action.
+
+    ``send_reaction(target_id, [emoji])`` — emoji set REPLACES that
+    sender's prior reactions on the target message.
+
+    ``start_reply(target_id, target_body)`` — pages stage the next
+    composed message as a quote-reply to this row.
+    """
     popover = Gtk.Popover.new()
     popover.set_parent(widget)
     popover.set_has_arrow(True)
-    row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-    row.set_margin_top(4); row.set_margin_bottom(4)
-    row.set_margin_start(4); row.set_margin_end(4)
-    for emoji in _QUICK_REACTIONS:
-        btn = Gtk.Button(label=emoji)
-        btn.add_css_class("flat")
-        def _on_clicked(_b, e=emoji):
-            send_reaction(target_id, [e])
+    column = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    column.set_margin_top(4); column.set_margin_bottom(4)
+    column.set_margin_start(4); column.set_margin_end(4)
+    if send_reaction is not None:
+        emoji_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        for emoji in _QUICK_REACTIONS:
+            btn = Gtk.Button(label=emoji)
+            btn.add_css_class("flat")
+            def _on_emoji(_b, e=emoji):
+                send_reaction(target_id, [e])
+                popover.popdown()
+            btn.connect("clicked", _on_emoji)
+            emoji_row.append(btn)
+        column.append(emoji_row)
+    if start_reply is not None:
+        reply_btn = Gtk.Button(label="Reply")
+        reply_btn.add_css_class("flat")
+        def _on_reply(_b):
+            start_reply(target_id, target_body)
             popover.popdown()
-        btn.connect("clicked", _on_clicked)
-        row.append(btn)
-    popover.set_child(row)
+        reply_btn.connect("clicked", _on_reply)
+        column.append(reply_btn)
+    popover.set_child(column)
 
-    # Long-press: phones / touchpads.
     long_press = Gtk.GestureLongPress.new()
-    def _on_long_press(_g, _x, _y):
-        popover.popup()
-    long_press.connect("pressed", _on_long_press)
+    long_press.connect("pressed", lambda *_: popover.popup())
     widget.add_controller(long_press)
 
-    # Right-click: desktop / mouse users.
     right_click = Gtk.GestureClick.new()
     right_click.set_button(3)
-    def _on_right_click(_g, _n, _x, _y):
-        popover.popup()
-    right_click.connect("pressed", _on_right_click)
+    right_click.connect("pressed", lambda *_: popover.popup())
     widget.add_controller(right_click)
 
 

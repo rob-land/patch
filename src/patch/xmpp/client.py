@@ -48,15 +48,31 @@ def _backoff_delay(fail_count: int) -> int:
     return _BACKOFF_SECONDS[min(fail_count - 1, len(_BACKOFF_SECONDS) - 1)]
 
 
+def _build_quote_prefix(target_body: str) -> str:
+    """Render a quoted prefix for a XEP-0461 reply body.
+
+    Each line of ``target_body`` gets a leading "> ", then a blank
+    line separates the quote from the reply text. Returns "" when the
+    target body is empty — the reply still carries the <reply/>
+    element, just without a fallback range."""
+    text = (target_body or "").strip()
+    if not text:
+        return ""
+    lines = [f"> {ln}" if ln else ">" for ln in text.splitlines()]
+    return "\n".join(lines) + "\n\n"
+
+
 class XmppClient(GObject.Object):
     __gtype_name__ = "PatchXmppClient"
 
     __gsignals__ = {
         # remote_jid (bare, str), body (str), incoming (bool), timestamp (float),
         # attachment_url (str, "" if none), message_id (str, the stanza id —
-        # used to correlate XEP-0184 delivery receipts)
+        # used to correlate XEP-0184 delivery receipts), reply_to_id (str,
+        # the stanza id of the message this one is a XEP-0461 reply to;
+        # empty when not a reply).
         "message-received": (GObject.SignalFlags.RUN_FIRST, None,
-                             (str, str, bool, float, str, str)),
+                             (str, str, bool, float, str, str, str)),
         # state string — matches account.STATE_*
         "state-changed":    (GObject.SignalFlags.RUN_FIRST, None, (str,)),
         # message_id (str), new delivery state (str: 'delivered' for now).
@@ -268,14 +284,44 @@ class XmppClient(GObject.Object):
     # -- send -------------------------------------------------------------
 
     def send_chat_message(self, to_jid: str, body: str,
-                          attachment_url: str = "") -> bool:
+                          attachment_url: str = "",
+                          reply_to: dict | None = None) -> bool:
+        """Send a chat message.
+
+        ``reply_to`` (XEP-0461 quoted reply) is an optional dict with
+        ``target_id`` (the stanza id being replied to) and
+        ``target_body`` (the body of that message, used to build the
+        plain-text quoted prefix that non-aware clients render).
+        """
         if not self._client or not self._client.is_stream_authenticated:
             log.warning("send: not connected")
             return False
         import uuid
         stanza_id = "patch-" + uuid.uuid4().hex
-        msg = Message(to=to_jid, typ="chat", body=body)
+        # If this is a reply, prepend a quoted prefix to the body and
+        # advertise the byte range via XEP-0428 fallback so aware
+        # clients strip it before rendering. The wire body keeps the
+        # full text so SMS/legacy clients still see context.
+        final_body = body
+        fallback_end = 0
+        if reply_to and reply_to.get("target_id"):
+            quoted = _build_quote_prefix(reply_to.get("target_body") or "")
+            if quoted:
+                final_body = quoted + body
+                fallback_end = len(quoted.encode("utf-8"))
+        msg = Message(to=to_jid, typ="chat", body=final_body)
         msg.setAttr("id", stanza_id)
+        if reply_to and reply_to.get("target_id"):
+            reply_el = msg.addChild("reply", namespace=Namespace.REPLY,
+                                    attrs={"id": reply_to["target_id"]})
+            target_jid = reply_to.get("target_jid")
+            if target_jid:
+                reply_el.setAttr("to", target_jid)
+            if fallback_end:
+                fb = msg.addChild("fallback", namespace=Namespace.FALLBACK,
+                                  attrs={"for": Namespace.REPLY})
+                fb.addChild("body", attrs={"start": "0",
+                                            "end": str(fallback_end)})
         # XEP-0184 receipt request — cheogram surfaces SMS delivery
         # status reports back via <received id='..'/>. Direct XMPP
         # peers also honour this and we render a 'delivered' tick.
@@ -301,8 +347,12 @@ class XmppClient(GObject.Object):
         # Local echo so the conversation list updates immediately. The
         # MAM/carbons round-trip will happen later in flight.
         from time import time as now
-        self.emit("message-received", to_jid, body, False, now(),
-                  attachment_url, stanza_id)
+        # Show only the reply text in the echoed body (the fallback
+        # prefix is a wire-format detail for non-aware clients).
+        echo_body = body
+        echo_reply_id = (reply_to.get("target_id") if reply_to else "") or ""
+        self.emit("message-received", to_jid, echo_body, False, now(),
+                  attachment_url, stanza_id, echo_reply_id)
         return True
 
     # -- XEP-0363 HTTP Upload --------------------------------------------
@@ -629,13 +679,40 @@ class XmppClient(GObject.Object):
                 except Exception:  # noqa: BLE001
                     pass
         msg_id = stanza.getAttr("id") or ""
+
+        # XEP-0461 quoted reply + XEP-0428 fallback handling. The body
+        # text we surface to the UI strips the quoted prefix so the
+        # bubble shows only the reply text — the reply target lets the
+        # renderer pull the original quote-snippet from its own row.
+        reply_to_id = ""
+        reply_el = stanza.getTag("reply", namespace=Namespace.REPLY)
+        if reply_el is not None:
+            reply_to_id = reply_el.getAttr("id") or ""
+            fb_el = stanza.getTag("fallback", namespace=Namespace.FALLBACK)
+            if fb_el is not None and fb_el.getAttr("for") == Namespace.REPLY:
+                fb_body = fb_el.getTag("body")
+                if fb_body is not None:
+                    try:
+                        start = int(fb_body.getAttr("start") or "0")
+                        end = int(fb_body.getAttr("end") or "0")
+                    except ValueError:
+                        start, end = 0, 0
+                    if end > start:
+                        # XEP-0428 indices are utf-8 byte offsets.
+                        try:
+                            raw = body.encode("utf-8")
+                            body = (raw[:start] + raw[end:]).decode(
+                                "utf-8", errors="replace").lstrip()
+                        except Exception:  # noqa: BLE001
+                            pass
+
         log.info("%smessage %s %s: %s%s",
                  "[mam] " if from_mam else "",
                  "<-" if incoming else "->",
                  bare, body[:80],
                  (" [oob " + attachment_url + "]") if attachment_url else "")
         self.emit("message-received", bare, body, incoming, timestamp,
-                  attachment_url, msg_id)
+                  attachment_url, msg_id, reply_to_id)
 
         # XEP-0184 request — peer wants us to confirm delivery. Reply
         # with <received/> matching the stanza id. Suppress during MAM

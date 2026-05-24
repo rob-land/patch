@@ -31,7 +31,7 @@ class MessagePersister:
         self._xmpp.connect("reaction-received", self._on_reaction)
 
     def _on_message(self, _xmpp, remote_jid, body, incoming, timestamp,
-                    attachment_url, message_id):
+                    attachment_url, message_id, reply_to_id):
         sender_jid = None
         if numfmt.is_group_jid(remote_jid):
             sender_jid, body = numfmt.parse_group_body(body)
@@ -44,7 +44,8 @@ class MessagePersister:
             self._store.add_message(
                 remote_jid, bool(incoming), body, timestamp, sender_jid,
                 attachment_url=attachment_url or None,
-                xmpp_id=xmpp_id, delivery_state=delivery_state)
+                xmpp_id=xmpp_id, delivery_state=delivery_state,
+                reply_to_id=reply_to_id or None)
         except Exception as exc:  # noqa: BLE001
             log.warning("persist failed for %s: %s", remote_jid, exc)
 
