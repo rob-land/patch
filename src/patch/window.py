@@ -43,7 +43,7 @@ class PatchWindow(Adw.ApplicationWindow):
     status_banner: Adw.Banner       = Gtk.Template.Child()
 
     def __init__(self, application, account, store, xmpp, calls, contacts,
-                 **kwargs):
+                 avatars=None, **kwargs):
         super().__init__(application=application, **kwargs)
         self._settings = Gio.Settings.new(APP_ID)
         self._account = account
@@ -51,6 +51,7 @@ class PatchWindow(Adw.ApplicationWindow):
         self._xmpp = xmpp
         self._calls = calls
         self._contacts = contacts
+        self._avatars = avatars
 
         # Persisted window geometry. get_default_size() returns the
         # configured default, not the live size — get_width/height per
@@ -99,7 +100,8 @@ class PatchWindow(Adw.ApplicationWindow):
                                                 store=self._store,
                                                 calls=self._calls)
         self._messages_page  = PatchMessagesPage(self._account, self._store,
-                                                  self._xmpp, self._contacts)
+                                                  self._xmpp, self._contacts,
+                                                  avatars=self._avatars)
         self._voicemail_page = PatchVoicemailPage(self._account,
                                                     store=self._store,
                                                     xmpp=self._xmpp,

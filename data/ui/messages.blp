@@ -69,6 +69,14 @@ template $PatchMessagesPage: Adw.Bin {
           show-start-title-buttons: false;
           show-end-title-buttons: false;
           title-widget: Adw.WindowTitle thread_title {};
+
+          // Thread overflow — block, etc.
+          [end]
+          Gtk.MenuButton thread_menu_button {
+            icon-name: "view-more-symbolic";
+            tooltip-text: _("Conversation options");
+            menu-model: thread_menu;
+          }
         }
 
         content: Gtk.Box {
@@ -113,4 +121,13 @@ template $PatchMessagesPage: Adw.Bin {
       };
     }
   };
+}
+
+menu thread_menu {
+  section {
+    item {
+      label: _("Block this number");
+      action: "patch.block-thread";
+    }
+  }
 }

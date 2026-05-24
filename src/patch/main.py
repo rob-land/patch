@@ -8,6 +8,7 @@ from gi.repository import Adw, Gio, GLib
 from patch import APP_ID
 from patch import account as account_mod
 from patch.account import Account
+from patch.avatars import AvatarManager
 from patch.calls import CallManager
 from patch.contacts import ContactsManager
 from patch.dialogs.account_dialog import PatchAccountDialog
@@ -46,6 +47,10 @@ class PatchApplication(Adw.Application):
         # the store. The messages page does view-only work.
         self._persister     = MessagePersister(self._xmpp, self._store)
         self._contacts      = ContactsManager(self._account)
+        # XEP-0084 PEP avatar cache. Hooks into the dispatcher when the
+        # stream comes up; until then it's idle. Avatars appear when a
+        # peer publishes one and are persisted to $XDG_CACHE_HOME.
+        self._avatars       = AvatarManager(self._xmpp)
         self._calls         = CallManager(self._account, self._xmpp,
                                           contacts=self._contacts,
                                           store=self._store)
@@ -78,7 +83,7 @@ class PatchApplication(Adw.Application):
             ("account",     self._show_account_dialog),
             ("preferences", self._show_preferences),
             ("show-log",    self._show_log),
-            ("connect",     lambda *_: self._xmpp.connect_to_server()),
+            ("connect",     self._on_connect_action),
             ("disconnect",  lambda *_: self._xmpp.disconnect_from_server()),
             ("quit",        lambda *_: self.quit()),
         ):
@@ -113,12 +118,27 @@ class PatchApplication(Adw.Application):
                               store=self._store,
                               xmpp=self._xmpp,
                               calls=self._calls,
-                              contacts=self._contacts)
+                              contacts=self._contacts,
+                              avatars=self._avatars)
         win.present()
-        if not self._account.is_configured:
+        if not self._account.is_configured or not self._account.get_password():
+            # No JID, or JID present but the keyring lost the password
+            # (e.g. wiped after a system event) — either way the user
+            # needs the account dialog before we can connect.
             self._show_account_dialog()
         else:
             self._xmpp.connect_to_server()
+
+    def _on_connect_action(self, *_):
+        # If the JID is known but the keyring has no password (lost
+        # after a keyring wipe or never persisted), surface the Account
+        # dialog so the user can re-enter it. Otherwise looping on the
+        # banner just re-runs the same FAILED → "Password missing"
+        # cycle and feels like the button is dead.
+        if self._account.is_configured and not self._account.get_password():
+            self._show_account_dialog()
+            return
+        self._xmpp.connect_to_server()
 
     def _on_account_state(self, account, _pspec):
         state = account.state

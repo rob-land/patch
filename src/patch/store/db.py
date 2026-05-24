@@ -55,6 +55,22 @@ CREATE INDEX IF NOT EXISTS idx_calls_log_started_at
 _MIGRATIONS = [
     ("attachment_url",
      "ALTER TABLE messages ADD COLUMN attachment_url TEXT"),
+    # XEP-0184 delivery receipts: outgoing messages persist their
+    # stanza id here so the inbound <received id='..'/> can be matched
+    # back. delivery_state is NULL on inbound rows (the column is
+    # outgoing-only) and one of {'sent', 'delivered', 'failed'} on
+    # outgoing rows. 'sent' is the local-echo state set at send-time;
+    # 'delivered' fires when the receipt arrives.
+    ("xmpp_id",
+     "ALTER TABLE messages ADD COLUMN xmpp_id TEXT"),
+    ("delivery_state",
+     "ALTER TABLE messages ADD COLUMN delivery_state TEXT"),
+    # XEP-0444 reactions: JSON map { sender_jid: [emoji, ...] }. A
+    # reactions stanza from a peer REPLACES that peer's entire set
+    # on a message, so we serialise the union once per write rather
+    # than keeping a normalised reactions table.
+    ("reactions_json",
+     "ALTER TABLE messages ADD COLUMN reactions_json TEXT"),
 ]
 
 
@@ -93,7 +109,9 @@ class MessageStore:
 
     def add_message(self, remote_jid: str, incoming: bool, body: str,
                     timestamp: float, sender_jid: Optional[str] = None,
-                    attachment_url: Optional[str] = None) -> int:
+                    attachment_url: Optional[str] = None,
+                    xmpp_id: Optional[str] = None,
+                    delivery_state: Optional[str] = None) -> int:
         # Dedup: MAM catch-up after a brief disconnect can replay a
         # message we already had via the live stream (or the local-echo
         # path for outbound). Same conversation, same body, timestamp
@@ -113,12 +131,54 @@ class MessageStore:
                 return row["id"]
             cur.execute(
                 "INSERT INTO messages "
-                "(remote_jid, incoming, body, sender_jid, timestamp, attachment_url) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "(remote_jid, incoming, body, sender_jid, timestamp, "
+                "attachment_url, xmpp_id, delivery_state) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (remote_jid, 1 if incoming else 0, body, sender_jid,
-                 timestamp, attachment_url),
+                 timestamp, attachment_url, xmpp_id, delivery_state),
             )
             return cur.lastrowid
+
+    def set_reactions(self, target_xmpp_id: str, sender_jid: str,
+                      emojis: list[str]) -> bool:
+        """Replace ``sender_jid``'s reactions on the message with stanza
+        id ``target_xmpp_id``. Returns True if the target row was
+        found. Reactions are stored as a JSON map { sender: [emojis] }
+        keyed by bare JID; passing an empty list clears that sender's
+        entry."""
+        import json
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id, reactions_json FROM messages WHERE xmpp_id=? LIMIT 1",
+                (target_xmpp_id,))
+            row = cur.fetchone()
+            if row is None:
+                return False
+            try:
+                existing = json.loads(row["reactions_json"] or "{}")
+            except (ValueError, TypeError):
+                existing = {}
+            if emojis:
+                existing[sender_jid] = list(emojis)
+            else:
+                existing.pop(sender_jid, None)
+            cur.execute(
+                "UPDATE messages SET reactions_json=? WHERE id=?",
+                (json.dumps(existing) if existing else None, row["id"]),
+            )
+            return True
+
+    def set_delivery_state(self, xmpp_id: str, state: str) -> None:
+        """Update delivery_state for an outgoing message keyed by its
+        stanza id. No-op if no row matches — receipts can race ahead of
+        the message persistence path on a slow disk, or come in for an
+        outbound message that landed via another client."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE messages SET delivery_state=? "
+                "WHERE xmpp_id=? AND incoming=0",
+                (state, xmpp_id),
+            )
 
     def mark_read(self, remote_jid: str) -> None:
         with self._cursor() as cur:
@@ -224,7 +284,8 @@ class MessageStore:
         with self._cursor() as cur:
             cur.execute("""
                 SELECT id, remote_jid, incoming, body, sender_jid, timestamp,
-                       read, attachment_url
+                       read, attachment_url, xmpp_id, delivery_state,
+                       reactions_json
                 FROM   messages
                 WHERE  remote_jid=?
                 ORDER  BY timestamp ASC

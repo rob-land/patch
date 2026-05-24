@@ -28,6 +28,7 @@ from nbxmpp.namespaces import Namespace
 from nbxmpp.protocol import JID, Iq, Message
 
 from patch.xmpp import jingle as jingle_mod
+from patch.xmpp.turn import fetch_turn_uris
 
 from patch import account as account_mod
 
@@ -52,11 +53,26 @@ class XmppClient(GObject.Object):
 
     __gsignals__ = {
         # remote_jid (bare, str), body (str), incoming (bool), timestamp (float),
-        # attachment_url (str, "" if none)
+        # attachment_url (str, "" if none), message_id (str, the stanza id —
+        # used to correlate XEP-0184 delivery receipts)
         "message-received": (GObject.SignalFlags.RUN_FIRST, None,
-                             (str, str, bool, float, str)),
+                             (str, str, bool, float, str, str)),
         # state string — matches account.STATE_*
         "state-changed":    (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        # message_id (str), new delivery state (str: 'delivered' for now).
+        # Fires when an inbound XEP-0184 <received/> ties back to one of
+        # our outgoing messages.
+        "message-receipt":  (GObject.SignalFlags.RUN_FIRST, None, (str, str)),
+        # XEP-0085: remote_jid (bare, str), state (str: 'active' /
+        # 'composing' / 'paused' / 'inactive' / 'gone'). Cheogram
+        # strips these on the SMS leg; mostly useful for direct XMPP.
+        "chat-state":       (GObject.SignalFlags.RUN_FIRST, None, (str, str)),
+        # XEP-0444: target_msg_id (str — id of the message reacted to),
+        # sender_jid (bare, str), remote_jid (the conversation, str),
+        # emojis (object, a list[str]). One signal per reactions
+        # stanza; the emoji list REPLACES sender_jid's prior set.
+        "reaction-received": (GObject.SignalFlags.RUN_FIRST, None,
+                              (str, str, str, object)),
         # XEP-0353 Jingle Message Initiation:
         # action ("propose" | "proceed" | "accept" | "reject" | "retract")
         # session_id (str)
@@ -84,6 +100,13 @@ class XmppClient(GObject.Object):
         # attempted. Flipped to True the first time connect_to_server is
         # called and back to False on disconnect_from_server.
         self._want_connected = False
+        # XEP-0215 TURN URI cache. Pre-fetched after login so the per-call
+        # path doesn't pay the disco round-trip. coturn defaults to 1h
+        # credential lifetime; we re-fetch at 30 min to stay comfortably
+        # inside that. Stores all advertised URIs (UDP/TCP/TURNS) so
+        # ICE can probe multiple transports; cleared on disconnect.
+        self._turn_uris: list[str] = []
+        self._turn_uri_fetched_at: float = 0.0
 
     # -- lifecycle --------------------------------------------------------
 
@@ -97,8 +120,20 @@ class XmppClient(GObject.Object):
         if not self._account.is_configured:
             log.debug("connect: no account configured, skipping")
             return
+        # Keep an existing client across involuntary disconnects so
+        # XEP-0198 smacks can resume the session — nbxmpp's connect()
+        # takes the "Reconnect" branch when called on a prior-successful
+        # client, replaying the resolved addresses and sending <resume/>
+        # on the new stream. If smacks resume succeeds, the server
+        # replays any stanzas it queued while we were offline; if it
+        # fails (timed out etc.) nbxmpp falls through to a fresh bind.
+        if self._client is not None and self._client.is_stream_authenticated:
+            log.debug("connect: stream already authenticated")
+            return
         if self._client is not None:
-            log.debug("connect: already have a client; disconnect first")
+            self._account.set_state(account_mod.STATE_CONNECTING)
+            log.info("reconnecting (smacks resume if supported)")
+            self._client.connect()
             return
 
         password = self._account.get_password()
@@ -165,11 +200,17 @@ class XmppClient(GObject.Object):
             self._account.set_state(account_mod.STATE_DISCONNECTED)
             self.emit("state-changed", account_mod.STATE_DISCONNECTED)
             return
-        log.info("disconnecting")
+        log.info("disconnecting (graceful — closes smacks session)")
         try:
-            self._client.disconnect()
+            # immediate=False lets nbxmpp send <r/>, ack, and close the
+            # SM session cleanly so the server doesn't keep it pending.
+            self._client.disconnect(immediate=False)
         finally:
+            # Clear here, not in _on_disconnected — _on_disconnected
+            # keeps the client so involuntary disconnects can resume.
             self._client = None
+            self._turn_uris = []
+            self._turn_uri_fetched_at = 0.0
             self._account.set_state(account_mod.STATE_DISCONNECTED)
             self.emit("state-changed", account_mod.STATE_DISCONNECTED)
 
@@ -177,6 +218,39 @@ class XmppClient(GObject.Object):
         if self._reconnect_source:
             GLib.source_remove(self._reconnect_source)
             self._reconnect_source = 0
+
+    # -- TURN URI cache ---------------------------------------------------
+
+    # 30 minutes — half the typical coturn 1h credential lifetime, so we
+    # never hand out a URI that's about to expire mid-call.
+    _TURN_CACHE_TTL = 30 * 60
+
+    def get_turn_uris(self, callback) -> None:
+        """Deliver fresh-enough TURN URIs to ``callback(list[str])``.
+
+        Cached across calls: re-fetched only when the cache is empty or
+        the prior fetch is older than ``_TURN_CACHE_TTL``. Always async —
+        the callback is invoked via the main loop even on a cache hit,
+        so callers can rely on the same control-flow shape regardless.
+        Order is UDP → TCP → TURNS so ICE prefers UDP relay candidates
+        but can fall through to TCP if UDP/3478 is firewalled.
+        """
+        import time
+        now = time.monotonic()
+        if self._turn_uris and (now - self._turn_uri_fetched_at) < self._TURN_CACHE_TTL:
+            GLib.idle_add(lambda: (callback(list(self._turn_uris)), False)[1])
+            return
+        server = self._account.jid.split("@", 1)[-1]
+        if not server or self._client is None:
+            GLib.idle_add(lambda: (callback([]), False)[1])
+            return
+        def _on_fetched(uris):
+            if uris:
+                self._turn_uris = uris
+                self._turn_uri_fetched_at = time.monotonic()
+                log.info("TURN URIs cached (live disco hit): %d", len(uris))
+            callback(uris)
+        fetch_turn_uris(self, server, _on_fetched)
 
     def _schedule_reconnect(self) -> None:
         if not self._want_connected:
@@ -198,7 +272,22 @@ class XmppClient(GObject.Object):
         if not self._client or not self._client.is_stream_authenticated:
             log.warning("send: not connected")
             return False
+        import uuid
+        stanza_id = "patch-" + uuid.uuid4().hex
         msg = Message(to=to_jid, typ="chat", body=body)
+        msg.setAttr("id", stanza_id)
+        # XEP-0184 receipt request — cheogram surfaces SMS delivery
+        # status reports back via <received id='..'/>. Direct XMPP
+        # peers also honour this and we render a 'delivered' tick.
+        msg.addChild("request", namespace=Namespace.RECEIPTS)
+        # XEP-0334 hint: ask the server (and any aware client) to MAM
+        # this even if it would otherwise be filtered.
+        msg.addChild("store", namespace=Namespace.HINTS)
+        # XEP-0085 chat state. Bundled in the message body itself
+        # ("active" = focused on the conversation). The standalone
+        # composing/paused/inactive states would need typing-detection
+        # plumbing on the compose entry — not wired up yet.
+        msg.addChild("active", namespace=Namespace.CHATSTATES)
         if attachment_url:
             # XEP-0066 Out-of-Band Data — JMP/cheogram looks for the
             # url here to ship MMS images out to PSTN.
@@ -213,7 +302,7 @@ class XmppClient(GObject.Object):
         # MAM/carbons round-trip will happen later in flight.
         from time import time as now
         self.emit("message-received", to_jid, body, False, now(),
-                  attachment_url)
+                  attachment_url, stanza_id)
         return True
 
     # -- XEP-0363 HTTP Upload --------------------------------------------
@@ -293,6 +382,9 @@ class XmppClient(GObject.Object):
             log.debug("carbons enable failed: %s", exc)
         self._account.set_state(account_mod.STATE_CONNECTED)
         self.emit("state-changed", account_mod.STATE_CONNECTED)
+        # Warm the TURN URI cache so the first call's audio path doesn't
+        # have to wait for an XEP-0215 disco round-trip.
+        self.get_turn_uris(lambda _uris: None)
         # MAM catch-up on by default — paginated via RSM (see
         # _request_mam_catchup) in pages of MAM_PAGE so the nbxmpp 7.2
         # large-batch parse issue is sidestepped. PATCH_MAM_CATCHUP=0
@@ -308,11 +400,16 @@ class XmppClient(GObject.Object):
         log.debug("login-successful (login-test mode only)")
 
     def _on_disconnected(self, _client, _signal_name):
-        log.info("disconnected")
-        self._client = None
+        resumable = bool(self._client and self._client.resumeable)
+        log.info("disconnected (smacks resumeable=%s)", resumable)
+        # Do NOT drop _client here. We want connect_to_server() to
+        # re-enter nbxmpp's reconnect path and let smacks <resume/>
+        # the session if the server still holds it. Only an explicit
+        # disconnect_from_server() or _on_connection_failed clears it.
+        # The TURN URI cache also stays — we're on the same XMPP server
+        # so the HMAC credentials remain valid for their TTL.
         self._account.set_state(account_mod.STATE_DISCONNECTED)
         self.emit("state-changed", account_mod.STATE_DISCONNECTED)
-        # Lost a connection we wanted to keep — back off and retry.
         if self._want_connected:
             self._fail_count += 1
             self._schedule_reconnect()
@@ -322,7 +419,14 @@ class XmppClient(GObject.Object):
         err = self._client.get_error() if self._client else None
         msg = str(err) if err else "connection failed"
         log.warning("connection failed (#%d): %s", self._fail_count, msg)
+        # Connection failure (vs. clean disconnect) means we couldn't
+        # establish a TCP/TLS stream. nbxmpp's smacks state may be
+        # stale at this point; drop the client so the next retry does
+        # a fresh DNS+auth pass instead of retrying resume against an
+        # address that's no longer reachable.
         self._client = None
+        self._turn_uris = []
+        self._turn_uri_fetched_at = 0.0
         self._account.set_state(account_mod.STATE_FAILED, msg)
         self.emit("state-changed", account_mod.STATE_FAILED)
         self._schedule_reconnect()
@@ -428,6 +532,62 @@ class XmppClient(GObject.Object):
         # Use Node-safe accessors. The dispatcher hands us raw simplexml
         # Nodes (not typed Message instances) for stanza-received, so
         # `stanza.getBody()` AttributeErrors on otherwise valid messages.
+
+        # XEP-0184 delivery receipt — peer (or the cheogram gateway
+        # echoing an SMS status report) acknowledging one of OUR sent
+        # messages. Body-less, carries <received id='..'/>. Don't fire
+        # on MAM replay; the live ack already arrived at the time.
+        if not from_mam:
+            rec = stanza.getTag("received", namespace=Namespace.RECEIPTS)
+            if rec is not None:
+                target_id = rec.getAttr("id") or ""
+                if target_id:
+                    self.emit("message-receipt", target_id, "delivered")
+                return
+
+        # XEP-0444 reactions (parsed before the empty-body short-circuit;
+        # reactions stanzas are body-less). A <reactions id='..'/> wraps
+        # zero or more <reaction/> children; an empty set clears that
+        # sender's reactions on the target message.
+        reactions_tag = stanza.getTag("reactions", namespace=Namespace.REACTIONS)
+        if reactions_tag is not None:
+            target_id = reactions_tag.getAttr("id") or ""
+            emojis = [r.getData() or "" for r in reactions_tag.getTags("reaction")]
+            emojis = [e for e in emojis if e]
+            r_from = stanza.getAttr("from") or ""
+            if target_id and r_from:
+                try:
+                    sender_jid = str(JID.from_string(r_from).bare)
+                    own_bare = str(JID.from_string(self._account.jid).bare)
+                    # Conversation key: if WE sent the reaction (via
+                    # carbon or another client), the thread is the
+                    # 'to', not the 'from'. Otherwise it's the sender.
+                    if sender_jid == own_bare:
+                        to_str = stanza.getAttr("to") or ""
+                        conv_jid = (str(JID.from_string(to_str).bare)
+                                    if to_str else sender_jid)
+                    else:
+                        conv_jid = sender_jid
+                    self.emit("reaction-received", target_id, sender_jid,
+                              conv_jid, emojis)
+                except Exception:  # noqa: BLE001
+                    pass
+            return
+
+        # XEP-0085 chat state (parsed before the empty-body short-circuit
+        # so bodyless composing/paused notifications surface). May also
+        # ride alongside a body — in that case we emit both signals.
+        for cs in ("active", "composing", "paused", "inactive", "gone"):
+            if stanza.getTag(cs, namespace=Namespace.CHATSTATES) is not None:
+                cs_from = stanza.getAttr("from") or ""
+                if cs_from:
+                    try:
+                        cs_bare = str(JID.from_string(cs_from).bare)
+                        self.emit("chat-state", cs_bare, cs)
+                    except Exception:  # noqa: BLE001
+                        pass
+                break
+
         body = stanza.getTagData("body")
         # XEP-0066 Out-of-Band Data — JMP/cheogram attaches MMS image
         # URLs as <x xmlns="jabber:x:oob"><url>...</url></x>. The body
@@ -437,7 +597,7 @@ class XmppClient(GObject.Object):
         if oob is not None:
             attachment_url = oob.getTagData("url") or ""
         if not body and not attachment_url:
-            # Receipt, chat state, marker, etc. — nothing to surface.
+            # Chat state, marker, etc. — nothing to surface.
             return
         # If we have an attachment but no body, default the body to the
         # URL so the conversation list preview has something to show.
@@ -468,13 +628,100 @@ class XmppClient(GObject.Object):
                     bare = str(JID.from_string(to_str).bare)
                 except Exception:  # noqa: BLE001
                     pass
+        msg_id = stanza.getAttr("id") or ""
         log.info("%smessage %s %s: %s%s",
                  "[mam] " if from_mam else "",
                  "<-" if incoming else "->",
                  bare, body[:80],
                  (" [oob " + attachment_url + "]") if attachment_url else "")
         self.emit("message-received", bare, body, incoming, timestamp,
-                  attachment_url)
+                  attachment_url, msg_id)
+
+        # XEP-0184 request — peer wants us to confirm delivery. Reply
+        # with <received/> matching the stanza id. Suppress during MAM
+        # replay (we'd be ack'ing a message the peer already knows
+        # was delivered).
+        if incoming and not from_mam and msg_id:
+            req = stanza.getTag("request", namespace=Namespace.RECEIPTS)
+            if req is not None:
+                self._send_receipt(from_str, msg_id)
+
+    # -- XEP-0444 Reactions ---------------------------------------------
+
+    def send_reaction(self, to_jid: str, target_msg_id: str,
+                      emojis: list[str]) -> bool:
+        """Replace our reactions on a message via XEP-0444.
+
+        Cheogram maps these to SMS Tapbacks on the wire — sending '👍'
+        for a JMP-routed thread surfaces as a Tapback on the peer's
+        SMS client. ``emojis`` is the full new set (not a delta); pass
+        an empty list to remove our reactions on that message.
+        """
+        if not self._client or not self._client.is_stream_authenticated:
+            return False
+        msg = Message(to=to_jid, typ="chat")
+        reactions = msg.addChild("reactions", namespace=Namespace.REACTIONS,
+                                 attrs={"id": target_msg_id})
+        for e in emojis:
+            reactions.addChild("reaction").addData(e)
+        # XEP-0334 store hint so the reactions land in MAM and any
+        # other client (or our own next session) can replay them.
+        msg.addChild("store", namespace=Namespace.HINTS)
+        try:
+            self._client.send_stanza(msg)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("send_reaction failed: %s", exc)
+            return False
+        # Local echo so the UI updates without waiting for carbons.
+        own_bare = str(JID.from_string(self._account.jid).bare)
+        try:
+            conv_jid = str(JID.from_string(to_jid).bare)
+        except Exception:  # noqa: BLE001
+            conv_jid = to_jid
+        self.emit("reaction-received", target_msg_id, own_bare,
+                  conv_jid, list(emojis))
+        return True
+
+    # -- XEP-0191 Blocking ----------------------------------------------
+
+    def block(self, jid: str) -> bool:
+        """Block a JID via XEP-0191. Server filters bidirectionally —
+        no new messages or presence either way. Returns True if the
+        request was dispatched (not the same as 'server applied it');
+        callers shouldn't optimistically update local UI on True alone.
+        """
+        if not self._client or not self._client.is_stream_authenticated:
+            return False
+        try:
+            module = self._client.get_module("Blocking")
+            module.block([JID.from_string(jid)])
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("block(%s) failed: %s", jid, exc)
+            return False
+
+    def unblock(self, jid: str) -> bool:
+        if not self._client or not self._client.is_stream_authenticated:
+            return False
+        try:
+            module = self._client.get_module("Blocking")
+            module.unblock([JID.from_string(jid)])
+            return True
+        except Exception as exc:  # noqa: BLE001
+            log.warning("unblock(%s) failed: %s", jid, exc)
+            return False
+
+    def _send_receipt(self, to_jid: str, target_id: str) -> None:
+        if not self._client or not self._client.is_stream_authenticated:
+            return
+        ack = Message(to=to_jid, typ="chat")
+        ack.addChild("received", namespace=Namespace.RECEIPTS,
+                     attrs={"id": target_id})
+        ack.addChild("store", namespace=Namespace.HINTS)
+        try:
+            self._client.send_stanza(ack)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("send receipt failed: %s", exc)
 
     # -- iq helpers ------------------------------------------------------
 

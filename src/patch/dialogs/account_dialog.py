@@ -10,6 +10,8 @@ import logging
 
 from gi.repository import Adw, Gio, Gtk
 
+from patch import account as account_mod
+
 log = logging.getLogger(__name__)
 
 
@@ -26,6 +28,11 @@ class PatchAccountDialog(Adw.PreferencesDialog):
     def __init__(self, account):
         super().__init__()
         self._account = account
+        # Set once Save has been pressed — gates whether we mirror the
+        # account state machine into status_label. Without this gate the
+        # dialog would echo any background state change the moment it
+        # opens, drowning out the initial "password missing" hint.
+        self._save_attempted = False
 
         # Prefill from the account model. Password gets fetched from
         # libsecret on demand, not bound — we don't want to surface it
@@ -35,14 +42,27 @@ class PatchAccountDialog(Adw.PreferencesDialog):
         existing = account.get_password() or ""
         if existing:
             self.password_row.set_text(existing)
+        elif account.is_configured:
+            # JID is remembered but the keyring has no password —
+            # tell the user up front why we surfaced the dialog.
+            self._set_status("Password missing from the keyring — re-enter it above.")
 
         # Local action group: the save button's action-name is
-        # "patch.save-account". One click = save + (later) attempt connect.
+        # "patch.save-account". One click = save + attempt connect.
         actions = Gio.SimpleActionGroup()
         save_action = Gio.SimpleAction.new("save-account", None)
         save_action.connect("activate", self._on_save)
         actions.add_action(save_action)
         self.insert_action_group("patch", actions)
+
+        # Mirror the account state into status_label so the user sees
+        # connecting → connected (or failed, with the error) instead of
+        # the label being stuck on "Saved. Connecting…".
+        self._state_handler = account.connect("notify::state",
+                                              self._on_account_state_changed)
+        self._error_handler = account.connect("notify::last-error",
+                                              self._on_account_state_changed)
+        self.connect("closed", self._on_closed)
 
     def _on_save(self, *_):
         jid = self.jid_row.get_text().strip()
@@ -50,25 +70,44 @@ class PatchAccountDialog(Adw.PreferencesDialog):
         host = self.host_row.get_text().strip()
 
         if not jid or "@" not in jid:
-            self._set_status(_msg="Enter a JID like rob@example.org or your JMP number.")
+            self._set_status("Enter a JID like rob@example.org or your JMP number.")
             return
         if not password:
-            self._set_status(_msg="Enter the account password.")
+            self._set_status("Enter the account password.")
             return
 
         ok = self._account.save(jid, password, host)
         if not ok:
-            self._set_status(
-                _msg="Could not store credentials in the system keyring."
-            )
+            self._set_status("Could not store credentials in the system keyring.")
             return
-        # Kick off the connection. The window's status banner mirrors
-        # the account state machine so the user sees connecting → online
-        # (or the error) without us having to babysit a status_label
-        # update here.
+        self._save_attempted = True
+        self._set_status("Saved. Connecting…")
+        # The connect action will flip account state to CONNECTING and
+        # then CONNECTED/FAILED — _on_account_state_changed picks that
+        # up and replaces this status text.
         if app := Gio.Application.get_default():
             app.activate_action("connect", None)
-        self._set_status(_msg="Saved. Connecting…")
 
-    def _set_status(self, _msg: str) -> None:
-        self.status_label.set_text(_msg)
+    def _on_account_state_changed(self, _account, _pspec):
+        if not self._save_attempted:
+            return
+        state = self._account.state
+        if state == account_mod.STATE_CONNECTING:
+            self._set_status("Connecting…")
+        elif state == account_mod.STATE_CONNECTED:
+            self._set_status("Connected.")
+        elif state == account_mod.STATE_FAILED:
+            self._set_status(self._account.last_error or "Connection failed.")
+        elif state == account_mod.STATE_DISCONNECTED:
+            self._set_status("Disconnected.")
+
+    def _on_closed(self, *_):
+        if self._state_handler:
+            self._account.disconnect(self._state_handler)
+            self._state_handler = 0
+        if self._error_handler:
+            self._account.disconnect(self._error_handler)
+            self._error_handler = 0
+
+    def _set_status(self, msg: str) -> None:
+        self.status_label.set_text(msg)
