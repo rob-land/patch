@@ -10,6 +10,7 @@ from patch import account as account_mod
 from patch.account import Account
 from patch.avatars import AvatarManager
 from patch.calls import CallManager
+from patch.dialogs.adhoc_dialog import PatchAdHocDialog
 from patch.contacts import ContactsManager
 from patch.dialogs.account_dialog import PatchAccountDialog
 from patch.dialogs.call_dialog import PatchCallDialog
@@ -83,6 +84,7 @@ class PatchApplication(Adw.Application):
             ("account",     self._show_account_dialog),
             ("preferences", self._show_preferences),
             ("show-log",    self._show_log),
+            ("jmp-commands", self._show_jmp_commands),
             ("connect",     self._on_connect_action),
             ("disconnect",  lambda *_: self._xmpp.disconnect_from_server()),
             ("quit",        lambda *_: self.quit()),
@@ -166,6 +168,11 @@ class PatchApplication(Adw.Application):
                 "file://" + log_dir(), None)
         except Exception as exc:  # noqa: BLE001
             log.warning("could not open log dir: %s", exc)
+
+    def _show_jmp_commands(self, *_):
+        gateway = self._account.gateway
+        dialog = PatchAdHocDialog(self._xmpp, gateway)
+        dialog.present(self.props.active_window)
 
     def _on_call_started(self, _manager, session, _direction):
         win = self.props.active_window

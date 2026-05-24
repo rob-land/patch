@@ -21,6 +21,7 @@ python.install_sources(
     '__main__.py',
     'account.py',
     'audio.py',
+    'avatars.py',
     'calls.py',
     'contacts.py',
     'jingle_session.py',
@@ -49,6 +50,7 @@ python.install_sources(
   files(
     'dialogs/__init__.py',
     'dialogs/account_dialog.py',
+    'dialogs/adhoc_dialog.py',
     'dialogs/call_dialog.py',
     'dialogs/new_message_dialog.py',
     'dialogs/preferences_dialog.py',
