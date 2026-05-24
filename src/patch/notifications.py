@@ -70,7 +70,7 @@ class NotificationManager:
     # -- handlers --------------------------------------------------------
 
     def _on_message(self, _xmpp, remote_jid, body, incoming, _timestamp,
-                    _attachment_url):
+                    _attachment_url, _message_id):
         if not incoming:
             return
         if not body:
@@ -78,7 +78,13 @@ class NotificationManager:
         # Suppress when the conversation is already on screen.
         if self._is_focused(remote_jid):
             return
-        self._fire_notification(remote_jid, body)
+        # Group SMS comes in as "<xmpp:+15551234@cheogram.com> text" —
+        # strip the wire prefix and prepend the resolved sender name so
+        # the body matches what the user sees inline in the thread.
+        sender_jid = None
+        if numfmt.is_group_jid(remote_jid):
+            sender_jid, body = numfmt.parse_group_body(body)
+        self._fire_notification(remote_jid, body, sender_jid)
 
     def _on_call_ended(self, _manager, session):
         # Only missed-call-shaped terminals: an INCOMING call that the
@@ -129,8 +135,13 @@ class NotificationManager:
             return False
         return self._focus_provider() == remote_jid
 
-    def _fire_notification(self, remote_jid: str, body: str) -> None:
+    def _fire_notification(self, remote_jid: str, body: str,
+                           sender_jid: str | None = None) -> None:
         title = _display_name(remote_jid, self._account.gateway, self._contacts)
+        if sender_jid:
+            sender_label = (self._contacts.label_for_jid(sender_jid)
+                            if self._contacts is not None else sender_jid)
+            body = f"{sender_label}: {body}"
         notif = Gio.Notification.new(title)
         notif.set_body(_truncate(body, 240))
         # icon: hint at messages rather than a generic app icon

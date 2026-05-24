@@ -320,18 +320,44 @@ class ContactsManager(GObject.Object):
         self._load_local_sources()
         new_index.update(self._by_number)
         if self._aggregator is not None:
-            individuals = self._aggregator.props.individuals
-            for ind in individuals.values():
-                name = ind.props.alias or ind.props.display_name or ""
-                if not name:
-                    continue
-                phones = ind.props.phone_numbers or []
-                for ph in phones:
-                    value = ph.props.value if hasattr(ph, "props") else ph.get_value()
-                    norm = numfmt.normalize_e164(value, "US")
-                    if norm:
-                        new_index[norm] = name
+            try:
+                self._overlay_folks(new_index)
+            except Exception as exc:  # noqa: BLE001
+                # Gee templated containers don't always introspect cleanly
+                # through PyGObject — values can come back as ints. Don't
+                # let a broken overlay hide the EDS-direct contacts we
+                # already loaded.
+                log.warning("folks overlay failed (%s: %s); using local sources only",
+                            exc.__class__.__name__, exc)
         if set(new_index.keys()) != prior_keys or new_index != self._by_number:
             log.info("contacts index: %d numbers", len(new_index))
             self._by_number = new_index
             self.emit("index-changed")
+
+    def _overlay_folks(self, new_index: dict[str, str]) -> None:
+        """Overlay Folks individuals onto ``new_index``.
+
+        Gee.Map iteration via PyGObject is fragile — ``MapIterator.get_value``
+        comes back as an int in some bindings because the templated return
+        type isn't recovered. We iterate the keys set (plain ``Gee.Set<string>``,
+        no templating ambiguity) and look each individual up by id.
+        """
+        individuals = self._aggregator.props.individuals
+        keys = individuals.get_keys()
+        itr = keys.iterator()
+        while itr.next():
+            key = itr.get()
+            if not isinstance(key, str):
+                continue
+            ind = individuals.get(key)
+            if ind is None or not hasattr(ind, "props"):
+                continue
+            name = ind.props.alias or ind.props.display_name or ""
+            if not name:
+                continue
+            phones = ind.props.phone_numbers or []
+            for ph in phones:
+                value = ph.props.value if hasattr(ph, "props") else ph.get_value()
+                norm = numfmt.normalize_e164(value, "US")
+                if norm:
+                    new_index[norm] = name

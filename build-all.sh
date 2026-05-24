@@ -94,7 +94,14 @@ for arch in "${ARCHES[@]}"; do
     bundle="patch-${arch}.flatpak"
     echo
     echo "==== Building Patch for ${arch} ===="
+    # --disable-updates: every source in the manifest is version-pinned
+    # (git tags or tarballs with sha256 checksums), so flatpak-builder's
+    # default "refresh the source cache" pass is a no-op when the
+    # network is healthy — and a hard failure when an upstream like
+    # gitlab.gnome.org is having a 503 spell. Skipping it makes builds
+    # resilient against outages without weakening the pin.
     flatpak-builder --arch="$arch" --repo=repo --force-clean \
+        --disable-updates \
         "$builddir" build-aux/flatpak/land.rob.patch.json
     echo "==== Bundling ${bundle} ===="
     flatpak build-bundle --arch="$arch" repo "$bundle" land.rob.patch
