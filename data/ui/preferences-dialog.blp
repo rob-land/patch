@@ -25,6 +25,29 @@ template $PatchPreferencesDialog: Adw.PreferencesDialog {
     }
 
     Adw.PreferencesGroup {
+      title: _("Message History");
+      description: _("Patch uses the server archive to catch up on SMS and MMS when it connects.");
+
+      Adw.SwitchRow sync_all_history_row {
+        title: _("Sync all history on connect");
+        subtitle: _("Fetch the full server archive instead of only new messages. This can take a while on large accounts.");
+      }
+
+      Adw.ActionRow {
+        title: _("Sync All History Now");
+        subtitle: _("Request the full server archive immediately.");
+
+        [suffix]
+        Gtk.Button {
+          label: _("Sync");
+          valign: center;
+          action-name: "app.sync-history";
+          styles ["suggested-action"]
+        }
+      }
+    }
+
+    Adw.PreferencesGroup {
       title: _("Push notifications");
       description: _("Self-hosted UnifiedPush via Prosody's mod_cloud_notify_unifiedpush.\nKill the app and you should still wake on incoming messages.");
 

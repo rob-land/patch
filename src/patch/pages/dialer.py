@@ -8,6 +8,7 @@ from typing import Optional
 
 from gi.repository import Adw, Gio, GLib, Gtk
 
+from patch import APP_ID
 from patch.numfmt import format_as_typed, normalize_e164, number_to_jid
 
 log = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ class PatchDialerPage(Adw.Bin):
 
     def __init__(self, account, store=None, calls=None, contacts=None):
         super().__init__()
+        self._settings = Gio.Settings.new(APP_ID)
         self._account = account
         self._store = store
         self._calls = calls
@@ -110,7 +112,9 @@ class PatchDialerPage(Adw.Bin):
         # Use the raw input we've been tracking, not the formatted text
         # — normalize_e164 strips formatting characters but it's
         # cleaner to start from the user's original digits.
-        normalized = normalize_e164(self._raw_number, default_country="US")
+        default_country = self._settings.get_string("default-country") or "US"
+        normalized = normalize_e164(
+            self._raw_number, default_country=default_country)
         if not normalized:
             log.info("dial: could not parse %r as a phone number",
                      self._raw_number)
@@ -125,8 +129,7 @@ class PatchDialerPage(Adw.Bin):
         jid = number_to_jid(normalized, self._account.gateway)
         log.info("dial: %s -> %s", normalized, jid)
         # win.start-call wires through main.py to CallManager and brings
-        # up the call dialog. Real audio is still TBD — JMI signalling
-        # only for now — but the user gets a working call surface.
+        # up the call dialog.
         self.activate_action("win.start-call", GLib.Variant("s", jid))
 
     def _on_message(self, *_):

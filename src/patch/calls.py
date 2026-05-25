@@ -28,6 +28,7 @@ import time
 
 from gi.repository import GObject
 
+from patch import account as account_mod
 from patch import numfmt
 from patch.jingle_session import JingleSession
 from patch.ringer import Ringer
@@ -111,6 +112,7 @@ class CallManager(GObject.Object):
 
         self._xmpp.connect("jmi-event", self._on_jmi)
         self._xmpp.connect("jingle-iq", self._on_jingle_iq)
+        self._xmpp.connect("state-changed", self._on_xmpp_state)
 
     # -- outgoing --------------------------------------------------------
 
@@ -275,6 +277,27 @@ class CallManager(GObject.Object):
             self._transition(sess, STATE_REJECTED)
         elif action == "retract":
             self._transition(sess, STATE_RETRACTED)
+
+    def _on_xmpp_state(self, _xmpp, state: str) -> None:
+        """Tear down calls when the signaling stream is gone.
+
+        Once XMPP is disconnected or failed, hangup/accept/reject IQs
+        cannot be delivered reliably. Keeping the call UI and GStreamer
+        pipeline alive in that state leaves a zombie call on mobile.
+        """
+        if state not in (account_mod.STATE_DISCONNECTED,
+                         account_mod.STATE_FAILED):
+            return
+        sess = self._session
+        if sess is None or sess.is_terminal:
+            return
+        log.info("ending call %s because XMPP state is %s",
+                 sess.session_id[:8], state)
+        if self._jingle is not None:
+            self._jingle.shutdown()
+            self._jingle = None
+        self._pending_initiate = None
+        self._transition(sess, STATE_ENDED)
 
     # -- Jingle audio orchestration -------------------------------------
 

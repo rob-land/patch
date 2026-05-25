@@ -6,7 +6,6 @@ import sys
 from gi.repository import Adw, Gio, GLib
 
 from patch import APP_ID
-from patch import account as account_mod
 from patch.account import Account
 from patch.avatars import AvatarManager
 from patch.calls import CallManager
@@ -92,6 +91,7 @@ class PatchApplication(Adw.Application):
             ("jmp-commands", self._show_jmp_commands),
             ("connect",     self._on_connect_action),
             ("disconnect",  lambda *_: self._xmpp.disconnect_from_server()),
+            ("sync-history", self._on_sync_history),
             ("quit",        lambda *_: self.quit()),
         ):
             action = Gio.SimpleAction.new(name, None)
@@ -147,22 +147,23 @@ class PatchApplication(Adw.Application):
             return
         self._xmpp.connect_to_server()
 
+    def _on_sync_history(self, *_):
+        if self._xmpp.request_history_sync(all_history=True):
+            self._toast("Syncing full message history…")
+        else:
+            self._toast("Connect before syncing history")
+
     def _on_account_state(self, account, _pspec):
         state = account.state
         log.debug("account state -> %s", state)
-        if state == account_mod.STATE_DISCONNECTED and account.is_configured:
-            # Don't autoreconnect on a user-initiated disconnect; let the
-            # explicit `app.connect` action drive it. For Phase 1 the
-            # only DISCONNECTED entry-point is "credentials just saved",
-            # so it's safe to connect here.
-            self._xmpp.connect_to_server()
 
     def _show_account_dialog(self, *_):
         dialog = PatchAccountDialog(self._account)
         dialog.present(self.props.active_window)
 
     def _show_preferences(self, *_):
-        dialog = PatchPreferencesDialog(xmpp=self._xmpp)
+        dialog = PatchPreferencesDialog(xmpp=self._xmpp,
+                                        account=self._account)
         dialog.present(self.props.active_window)
 
     def _show_log(self, *_):
@@ -173,6 +174,13 @@ class PatchApplication(Adw.Application):
                 "file://" + log_dir(), None)
         except Exception as exc:  # noqa: BLE001
             log.warning("could not open log dir: %s", exc)
+
+    def _toast(self, message: str) -> None:
+        win = self.props.active_window
+        if win is None:
+            log.info(message)
+            return
+        win.activate_action("win.toast", GLib.Variant("s", message))
 
     def _show_jmp_commands(self, *_):
         gateway = self._account.gateway

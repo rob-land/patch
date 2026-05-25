@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from gi.repository import GLib, GObject
+from gi.repository import Gio, GLib, GObject
 
 from nbxmpp.client import Client as NbxClient
 from nbxmpp.const import ConnectionType
@@ -30,6 +30,7 @@ from nbxmpp.protocol import JID, Iq, Message
 from patch.xmpp import jingle as jingle_mod
 from patch.xmpp.turn import fetch_turn_uris
 
+from patch import APP_ID
 from patch import account as account_mod
 
 log = logging.getLogger(__name__)
@@ -108,6 +109,7 @@ class XmppClient(GObject.Object):
 
     def __init__(self, account, store=None):
         super().__init__()
+        self._settings = Gio.Settings.new(APP_ID)
         self._account = account
         self._store = store        # optional; only used for MAM catch-up
         self._client: Optional[NbxClient] = None
@@ -470,7 +472,8 @@ class XmppClient(GObject.Object):
         # to opt OUT (e.g. for debugging).
         import os
         if os.environ.get("PATCH_MAM_CATCHUP", "1") == "1":
-            self._request_mam_catchup()
+            self.request_history_sync(
+                all_history=self._settings.get_boolean("sync-all-history"))
 
     def _on_login_successful(self, _client, _signal_name):
         # Only fires in login-test mode (see _on_connected). Kept as a
@@ -710,10 +713,11 @@ class XmppClient(GObject.Object):
         msg_id = stanza.getAttr("id") or ""
 
         # XEP-0308 message correction: this stanza REPLACES an earlier
-        # one with id=replace_id. Skip MAM replay — the live ack landed
-        # first time around, and replaying it would double-apply.
+        # one with id=replace_id. Apply MAM replays too; the store update
+        # is idempotent, and treating archived corrections as fresh
+        # messages creates duplicate bubbles after reconnect.
         replace_el = stanza.getTag("replace", namespace=Namespace.CORRECT)
-        if replace_el is not None and not from_mam:
+        if replace_el is not None:
             target_id = replace_el.getAttr("id") or ""
             if target_id:
                 self.emit("message-corrected", target_id, bare, body, timestamp)
@@ -948,25 +952,38 @@ class XmppClient(GObject.Object):
     # cursor until complete=True.
     MAM_PAGE = 20
 
-    def _request_mam_catchup(self) -> None:
+    def request_history_sync(self, *, all_history: bool = False) -> bool:
+        """Request a paginated MAM sync.
+
+        ``all_history`` omits the MAM start bound and lets the server
+        return its full retained archive. Otherwise we resume from the
+        latest cached message, falling back to the last day on first run.
+        """
         if self._client is None or self._store is None:
-            return
+            return False
         try:
             mam = self._client.get_module("MAM")
         except Exception as exc:  # noqa: BLE001
             log.warning("MAM module unavailable: %s", exc)
-            return
+            return False
 
         import datetime as dt
-        latest = self._store.latest_timestamp()
-        if latest > 0:
-            start = dt.datetime.fromtimestamp(latest, tz=dt.timezone.utc)
+        if all_history:
+            start = None
         else:
-            # First-ever connect: limit to the last day so we don't drag
-            # in months of unrelated archive.
-            start = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
+            latest = self._store.latest_timestamp()
+            if latest > 0:
+                start = dt.datetime.fromtimestamp(latest, tz=dt.timezone.utc)
+            else:
+                # First-ever connect: limit to the last day unless the
+                # user explicitly opted into full archive sync.
+                start = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=1)
         own_jid = JID.from_string(self._account.jid)
-        log.info("MAM catch-up from %s", start.isoformat(timespec="seconds"))
+        if start is None:
+            log.info("MAM catch-up from beginning of server archive")
+        else:
+            log.info("MAM catch-up from %s",
+                     start.isoformat(timespec="seconds"))
         # Stash MAM state on self instead of closing over kwargs in a
         # lambda — nbxmpp's add_done_callback uses weak=True by default,
         # and a lambda has no strong owner so the weakref dies before
@@ -976,19 +993,26 @@ class XmppClient(GObject.Object):
         self._mam_start = start
         self._mam_page = 1
         self._mam_query_page(after=None)
+        return True
+
+    def _request_mam_catchup(self) -> None:
+        self.request_history_sync(
+            all_history=self._settings.get_boolean("sync-all-history"))
 
     def _mam_query_page(self, after: str | None) -> None:
         """Fire one MAM page; the bound-method callback chains to the
         next on incomplete results."""
         try:
-            self._mam.make_query(
-                jid=self._mam_jid,
-                queryid=f"patch-catchup-p{self._mam_page}",
-                start=self._mam_start,
-                max_=self.MAM_PAGE,
-                after=after,
-                callback=self._on_mam_page_done,
-            )
+            query = {
+                "jid": self._mam_jid,
+                "queryid": f"patch-catchup-p{self._mam_page}",
+                "max_": self.MAM_PAGE,
+                "after": after,
+                "callback": self._on_mam_page_done,
+            }
+            if self._mam_start is not None:
+                query["start"] = self._mam_start
+            self._mam.make_query(**query)
         except Exception as exc:  # noqa: BLE001
             log.warning("MAM page %d failed to dispatch: %s",
                         self._mam_page, exc)

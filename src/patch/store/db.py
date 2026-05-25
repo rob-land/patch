@@ -108,6 +108,11 @@ class MessageStore:
                 if col not in existing:
                     log.info("running migration: add column %s", col)
                     cur.execute(ddl)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_messages_xmpp_id
+                    ON messages(xmpp_id)
+                    WHERE xmpp_id IS NOT NULL
+            """)
 
     def _ensure_fts(self) -> None:
         """Create the FTS5 full-text index over message bodies if it
@@ -173,17 +178,27 @@ class MessageStore:
                     xmpp_id: Optional[str] = None,
                     delivery_state: Optional[str] = None,
                     reply_to_id: Optional[str] = None) -> int:
-        # Dedup: MAM catch-up after a brief disconnect can replay a
-        # message we already had via the live stream (or the local-echo
-        # path for outbound). Same conversation, same body, timestamp
-        # within 5 seconds == duplicate. Return the existing id so
-        # callers see the same shape either way.
+        # Dedup: MAM catch-up and sent carbons can replay a message we
+        # already had via the live stream or the local-echo path. Prefer
+        # stanza ids when present; fall back to the old timestamp/body
+        # heuristic only for legacy messages without ids.
         with self._cursor() as cur:
+            if xmpp_id:
+                cur.execute("""
+                    SELECT id FROM messages
+                    WHERE remote_jid=?
+                      AND xmpp_id=?
+                    LIMIT 1
+                """, (remote_jid, xmpp_id))
+                row = cur.fetchone()
+                if row is not None:
+                    return row["id"]
             cur.execute("""
                 SELECT id FROM messages
                 WHERE remote_jid=?
                   AND body=?
                   AND incoming=?
+                  AND xmpp_id IS NULL
                   AND ABS(timestamp - ?) < 5
                 LIMIT 1
             """, (remote_jid, body, 1 if incoming else 0, timestamp))
@@ -417,12 +432,16 @@ class MessageStore:
         """
         with self._cursor() as cur:
             cur.execute("""
-                SELECT id, remote_jid, incoming, body, sender_jid, timestamp,
-                       read, attachment_url, xmpp_id, delivery_state,
-                       reactions_json, reply_to_id, corrected_at
-                FROM   messages
-                WHERE  remote_jid=?
-                ORDER  BY timestamp ASC
-                LIMIT  ?
+                SELECT *
+                FROM (
+                    SELECT id, remote_jid, incoming, body, sender_jid, timestamp,
+                           read, attachment_url, xmpp_id, delivery_state,
+                           reactions_json, reply_to_id, corrected_at
+                    FROM   messages
+                    WHERE  remote_jid=?
+                    ORDER  BY timestamp DESC
+                    LIMIT  ?
+                )
+                ORDER BY timestamp ASC
             """, (remote_jid, limit))
             return [dict(r) for r in cur.fetchall()]

@@ -29,6 +29,10 @@
       <default>"US"</default>
       <summary>ISO country code used by libphonenumber when parsing local-form numbers</summary>
     </key>
+    <key name="sync-all-history" type="b">
+      <default>false</default>
+      <summary>Whether MAM catch-up should request the full server archive on connect</summary>
+    </key>
     <key name="push-distributor" type="s">
       <default>""</default>
       <summary>D-Bus name of the currently-bound UnifiedPush distributor (empty = none)</summary>

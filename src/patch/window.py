@@ -177,6 +177,8 @@ class PatchWindow(Adw.ApplicationWindow):
         NotificationManager calls this through its focus_provider to
         decide whether to suppress notifications.
         """
+        if self.view_stack.get_visible_child_name() != "messages":
+            return None
         return self._messages_page.focused_jid()
 
     def _on_open_conversation(self, _action, param):

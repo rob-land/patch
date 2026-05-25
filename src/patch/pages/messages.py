@@ -286,7 +286,7 @@ class PatchMessagesPage(Adw.Bin):
             return
         self._open_thread(jid)
 
-    def _open_thread(self, remote_jid: str) -> None:
+    def _open_thread(self, remote_jid: str, *, navigate: bool = True) -> None:
         self._open_jid = remote_jid
         name = self._display_name_for(remote_jid, self._account.gateway)
         self.thread_title.set_title(name)
@@ -325,7 +325,8 @@ class PatchMessagesPage(Adw.Bin):
         # Incremental refresh so the unread badge clears without
         # tearing down the entire list.
         self._update_conversation_for(remote_jid)
-        self.nav.push(self.thread_page)
+        if navigate and self.nav.get_visible_page() is not self.thread_page:
+            self.nav.push(self.thread_page)
 
     def _on_compose_activate(self, *_):
         if not self._open_jid:
@@ -585,11 +586,11 @@ class PatchMessagesPage(Adw.Bin):
 
     def _on_reaction_received(self, _xmpp, _target_id, _sender, conv_jid, _emojis):
         if self._open_jid == conv_jid:
-            self._open_thread(conv_jid)
+            self._open_thread(conv_jid, navigate=False)
 
     def _on_message_corrected(self, _xmpp, _target_id, conv_jid, _new_body, _ts):
         if self._open_jid == conv_jid:
-            self._open_thread(conv_jid)
+            self._open_thread(conv_jid, navigate=False)
         self._update_conversation_for(conv_jid)
 
     # -- typing indicators -----------------------------------------------
@@ -641,7 +642,7 @@ class PatchMessagesPage(Adw.Bin):
         # The conversation list doesn't show receipts so skip refresh
         # for that.
         if self._open_jid is not None:
-            self._open_thread(self._open_jid)
+            self._open_thread(self._open_jid, navigate=False)
 
     def _on_message_received(self, _xmpp, remote_jid, body, incoming, timestamp,
                              attachment_url, message_id, reply_to_id):
@@ -657,7 +658,7 @@ class PatchMessagesPage(Adw.Bin):
             if reply_to_id:
                 # The replied-to row needs to be in the in-memory map
                 # we hand to the renderer — a full reopen does that.
-                self._open_thread(remote_jid)
+                self._open_thread(remote_jid, navigate=False)
             else:
                 sender_jid = None
                 if numfmt.is_group_jid(remote_jid):

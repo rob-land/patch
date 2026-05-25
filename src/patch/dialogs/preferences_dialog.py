@@ -26,16 +26,23 @@ class PatchPreferencesDialog(Adw.PreferencesDialog):
     endpoint_row:    Adw.ActionRow = Gtk.Template.Child()
     log_path_row:    Adw.ActionRow = Gtk.Template.Child()
     blocked_group:   Adw.PreferencesGroup = Gtk.Template.Child()
+    sync_all_history_row: Adw.SwitchRow = Gtk.Template.Child()
 
-    def __init__(self, xmpp=None):
+    def __init__(self, xmpp=None, account=None):
         super().__init__()
         self._xmpp = xmpp
-        settings = Gio.Settings.new(APP_ID)
-        dist = settings.get_string("push-distributor") or "(none configured)"
-        ep   = settings.get_string("push-endpoint")    or "(not registered yet)"
+        self._account = account
+        self._settings = Gio.Settings.new(APP_ID)
+        dist = self._settings.get_string("push-distributor") \
+            or "(none configured)"
+        ep = self._settings.get_string("push-endpoint") \
+            or "(not registered yet)"
         self.distributor_row.set_subtitle(dist)
         self.endpoint_row.set_subtitle(ep)
         self.log_path_row.set_subtitle(log_path())
+        self._settings.bind(
+            "sync-all-history", self.sync_all_history_row, "active",
+            Gio.SettingsBindFlags.DEFAULT)
         GLib.idle_add(self._fetch_block_list)
 
     def _fetch_block_list(self) -> bool:
@@ -66,7 +73,9 @@ class PatchPreferencesDialog(Adw.PreferencesDialog):
         from patch import numfmt
         for jid in blocked_jids:
             jid_str = str(jid)
-            number = numfmt.jid_to_number(jid_str, "cheogram.com")
+            gateway = (self._account.gateway
+                       if self._account is not None else "cheogram.com")
+            number = numfmt.jid_to_number(jid_str, gateway)
             display = numfmt.format_for_display(number) if number else jid_str
             row = Adw.ActionRow(title=display)
             row.set_use_markup(False)

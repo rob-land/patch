@@ -96,8 +96,29 @@ with tempfile.TemporaryDirectory() as tmp:
     eq("different body inserts",
        len(store.thread("+15552222@cheogram.com")), pre_count + 2)
 
+    # Stanza ids are the primary dedup key. This catches local echo +
+    # sent-carbon replays where body text can differ (e.g. quoted replies).
+    first_id = store.add_message("+15554444@cheogram.com", incoming=False,
+                                 body="reply text", timestamp=500.0,
+                                 xmpp_id="patch-1")
+    replay_id = store.add_message("+15554444@cheogram.com", incoming=False,
+                                  body="> quoted\n\nreply text",
+                                  timestamp=507.0, xmpp_id="patch-1")
+    eq("xmpp_id dedup returns existing id", replay_id, first_id)
+    eq("xmpp_id dedup keeps one row",
+       len(store.thread("+15554444@cheogram.com")), 1)
+
+    # Thread views should show the newest window, then render oldest first.
+    for i in range(205):
+        store.add_message("+15556666@cheogram.com", incoming=True,
+                          body=f"msg-{i}", timestamp=1000.0 + i)
+    recent_thread = store.thread("+15556666@cheogram.com")
+    eq("thread returns default limit", len(recent_thread), 200)
+    eq("thread drops oldest overflow", recent_thread[0]["body"], "msg-5")
+    eq("thread includes newest message", recent_thread[-1]["body"], "msg-204")
+
     # latest_timestamp() returns max(timestamp) across all rows
-    eq("latest_timestamp", store.latest_timestamp(), 402.5)
+    eq("latest_timestamp", store.latest_timestamp(), 1204.0)
 
 print()
 print("PASS  test_db")

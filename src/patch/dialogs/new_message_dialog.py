@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 
-from gi.repository import Adw, GLib, Gtk
+from gi.repository import Adw, Gio, GLib, Gtk
 
+from patch import APP_ID
 from patch.numfmt import normalize_e164, number_to_jid
 
 log = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ class PatchNewMessageDialog(Adw.Dialog):
 
     def __init__(self, account, parent_window):
         super().__init__()
+        self._settings = Gio.Settings.new(APP_ID)
         self._account = account
         self._parent_window = parent_window
         self.open_button.connect("clicked", self._on_open)
@@ -35,7 +37,8 @@ class PatchNewMessageDialog(Adw.Dialog):
 
     def _on_open(self, *_):
         raw = self.number_row.get_text().strip()
-        normalized = normalize_e164(raw, default_country="US")
+        default_country = self._settings.get_string("default-country") or "US"
+        normalized = normalize_e164(raw, default_country=default_country)
         if not normalized:
             self.number_row.add_css_class("error")
             return
