@@ -274,6 +274,13 @@ class JingleSession(GObject.Object):
 
     def _flush_pending_local(self) -> None:
         self._local_sdp_sent = True
+        # Guard: if we never produced a local SDP (engine shut down
+        # during pre-warm before create_offer/answer completed), the
+        # ufrag/pwd/fp attributes won't exist. Sending transport-info
+        # with empty ufrag is malformed — peer drops them. Skip.
+        if not getattr(self, "_local_ice_ufrag", ""):
+            self._pending_local_candidates.clear()
+            return
         for line in self._pending_local_candidates:
             self._send_trickle_candidate(line)
         self._pending_local_candidates.clear()

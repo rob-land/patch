@@ -61,6 +61,8 @@ template $PatchCallDialog: Adw.Dialog {
         column-homogeneous: true;
         row-homogeneous: true;
         halign: center;
+        // WCAG 2.1 AA minimum 48px touch targets for phone screens.
+        width-request: 192;
 
         Gtk.Button { label: "1"; tooltip-text: _("Digit 1"); action-name: "patch.dtmf"; action-target: "\"1\""; styles ["circular"] layout { column: 0; row: 0; }}
         Gtk.Button { label: "2"; tooltip-text: _("Digit 2"); action-name: "patch.dtmf"; action-target: "\"2\""; styles ["circular"] layout { column: 1; row: 0; }}
