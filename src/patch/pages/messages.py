@@ -180,6 +180,11 @@ class PatchMessagesPage(Adw.Bin):
                 subtitle=f"{ts} — {snippet}",
                 activatable=True,
             )
+            row.set_subtitle_selectable(False)
+            # Adw.ActionRow interprets subtitle as Pango markup by
+            # default — disable so &, <, > in message bodies don't
+            # break rendering.
+            row.set_use_markup(False)
             row.set_name(jid)
             row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
             self.conversations_list.append(row)
