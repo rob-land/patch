@@ -17,4 +17,8 @@ CallsXmppCall *calls_xmpp_call_new(const char *session_id,
                                    const char *peer_number,
                                    gboolean inbound);
 
+void calls_xmpp_call_set_proxy(CallsXmppCall *self, GDBusProxy *proxy);
+void calls_xmpp_call_set_state_from_string(CallsXmppCall *self,
+                                           const char *state);
+
 G_END_DECLS

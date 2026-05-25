@@ -16,4 +16,13 @@ G_DECLARE_FINAL_TYPE(CallsXmppOrigin, calls_xmpp_origin,
 
 CallsXmppOrigin *calls_xmpp_origin_new(CallsXmppProvider *provider);
 
+/* Internal — called by the provider's D-Bus signal handler. */
+void calls_xmpp_origin_handle_incoming(CallsXmppOrigin *self,
+                                       const char *session_id,
+                                       const char *number,
+                                       const char *display_name);
+void calls_xmpp_origin_handle_state_changed(CallsXmppOrigin *self,
+                                            const char *session_id,
+                                            const char *state);
+
 G_END_DECLS
