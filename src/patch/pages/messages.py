@@ -37,6 +37,7 @@ class PatchMessagesPage(Adw.Bin):
     thread_page:       Adw.NavigationPage = Gtk.Template.Child()
     messages_stack:    Gtk.Stack          = Gtk.Template.Child()
     conversations_list: Gtk.ListBox       = Gtk.Template.Child()
+    search_entry:      Gtk.SearchEntry    = Gtk.Template.Child()
     thread_title:      Adw.WindowTitle    = Gtk.Template.Child()
     thread_list:       Gtk.ListBox        = Gtk.Template.Child()
     compose_entry:     Gtk.Entry          = Gtk.Template.Child()
@@ -71,6 +72,8 @@ class PatchMessagesPage(Adw.Bin):
         self.nav.connect("notify::visible-page", self._on_nav_changed)
 
         self.conversations_list.connect("row-activated", self._on_row_activated)
+        self.search_entry.connect("search-changed", self._on_search_changed)
+        self.search_entry.connect("stop-search", self._on_search_stopped)
         self.compose_entry.connect("activate", self._on_compose_activate)
         self.send_button.connect("clicked", self._on_compose_activate)
         self.attach_button.connect("clicked", self._on_attach_clicked)
@@ -146,6 +149,45 @@ class PatchMessagesPage(Adw.Bin):
         # thread), let the dimmed status push back down through the
         # focused_jid() helper — no state to mutate here, just a hook.
         pass
+
+    # -- search ------------------------------------------------------------
+
+    def _on_search_changed(self, entry):
+        query = entry.get_text().strip()
+        if not query:
+            self._on_search_stopped()
+            return
+        results = self._store.search(query)
+        # Replace conversation list content with search results.
+        while True:
+            child = self.conversations_list.get_first_child()
+            if child is None:
+                break
+            self.conversations_list.remove(child)
+        if not results:
+            self.messages_stack.set_visible_child_name("list")
+            return
+        gateway = self._account.gateway
+        from datetime import datetime
+        for r in results:
+            jid = r["remote_jid"]
+            title = self._display_name_for(jid, gateway)
+            # Show the message body snippet + timestamp as subtitle.
+            ts = datetime.fromtimestamp(r["timestamp"]).strftime("%b %d %H:%M")
+            snippet = _truncate(r.get("body") or "", 60)
+            row = Adw.ActionRow(
+                title=title,
+                subtitle=f"{ts} — {snippet}",
+                activatable=True,
+            )
+            row.set_name(jid)
+            row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+            self.conversations_list.append(row)
+        self.messages_stack.set_visible_child_name("list")
+
+    def _on_search_stopped(self, *_):
+        self.search_entry.set_text("")
+        self._refresh_conversation_list()
 
     # -- conversation list -----------------------------------------------
 

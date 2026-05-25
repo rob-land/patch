@@ -97,6 +97,7 @@ class MessageStore:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._run_migrations()
+        self._ensure_fts()
         log.info("message store at %s", path)
 
     def _run_migrations(self) -> None:
@@ -107,6 +108,46 @@ class MessageStore:
                 if col not in existing:
                     log.info("running migration: add column %s", col)
                     cur.execute(ddl)
+
+    def _ensure_fts(self) -> None:
+        """Create the FTS5 full-text index over message bodies if it
+        doesn't exist, and wire triggers to keep it in sync."""
+        with self._cursor() as cur:
+            cur.executescript("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
+                    USING fts5(body, content=messages, content_rowid=id);
+
+                CREATE TRIGGER IF NOT EXISTS messages_fts_ai
+                    AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(rowid, body)
+                        VALUES (new.id, new.body);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS messages_fts_au
+                    AFTER UPDATE OF body ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, body)
+                        VALUES('delete', old.id, old.body);
+                    INSERT INTO messages_fts(rowid, body)
+                        VALUES (new.id, new.body);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS messages_fts_ad
+                    AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, body)
+                        VALUES('delete', old.id, old.body);
+                END;
+            """)
+            # Rebuild the index if it's empty but messages exist (first
+            # run on an existing db that predates FTS).
+            cur.execute("SELECT COUNT(*) FROM messages")
+            msg_count = cur.fetchone()[0]
+            if msg_count > 0:
+                cur.execute("SELECT COUNT(*) FROM messages_fts")
+                fts_count = cur.fetchone()[0]
+                if fts_count == 0:
+                    log.info("rebuilding FTS index (%d messages)", msg_count)
+                    cur.execute(
+                        "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
 
     @contextmanager
     def _cursor(self) -> Iterator[sqlite3.Cursor]:
@@ -250,6 +291,32 @@ class MessageStore:
             return ts or 0.0
 
     # -- reads -----------------------------------------------------------
+
+    def search(self, query: str, limit: int = 50) -> list[dict]:
+        """Full-text search across all message bodies via FTS5.
+
+        Returns rows with id, remote_jid, body, timestamp, incoming —
+        enough for the UI to show a result list with conversation
+        context. Results are ranked by FTS5's bm25 relevance score.
+        """
+        if not query or not query.strip():
+            return []
+        with self._cursor() as cur:
+            # FTS5 match syntax: quote the user's input so special
+            # chars (AND, OR, NOT, quotes) don't break the query.
+            # Wrapping in double-quotes makes it a phrase search;
+            # appending * enables prefix matching.
+            safe = query.strip().replace('"', '""')
+            cur.execute("""
+                SELECT m.id, m.remote_jid, m.body, m.timestamp, m.incoming,
+                       m.sender_jid
+                FROM   messages_fts f
+                JOIN   messages m ON m.id = f.rowid
+                WHERE  messages_fts MATCH ?
+                ORDER  BY rank
+                LIMIT  ?
+            """, (f'"{safe}"*', limit))
+            return [dict(r) for r in cur.fetchall()]
 
     def conversation_for(self, remote_jid: str) -> dict | None:
         """Single-conversation summary (same shape as conversations())."""

@@ -8,6 +8,16 @@ template $PatchMessagesPage: Adw.Bin {
       tag: "list";
 
       child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar list_header {
+          show-start-title-buttons: false;
+          show-end-title-buttons: false;
+          title-widget: Gtk.SearchEntry search_entry {
+            placeholder-text: _("Search messages");
+            hexpand: true;
+          };
+        }
+
         content: Gtk.Overlay {
           // Floating action button — bottom-right, opens a number-entry
           // dialog so the user can start a fresh conversation. Using
