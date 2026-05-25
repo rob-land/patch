@@ -250,6 +250,10 @@ class ContactsManager(GObject.Object):
             log.info("gsconnect: loaded %d numbers across %s",
                      added, gsc_root)
 
+    def all_contacts(self) -> dict[str, str]:
+        """Return {e164_number: display_name} for all known contacts."""
+        return dict(self._by_number)
+
     def lookup(self, number_e164: str) -> str | None:
         """Return the display name for a number, or None if unknown."""
         if not number_e164:

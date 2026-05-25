@@ -31,12 +31,14 @@ class PatchDialerPage(Adw.Bin):
     backspace_button: Gtk.Button  = Gtk.Template.Child()
     message_button:  Gtk.Button   = Gtk.Template.Child()
     call_button:     Gtk.Button   = Gtk.Template.Child()
+    contacts_button: Gtk.Button   = Gtk.Template.Child()
 
-    def __init__(self, account, store=None, calls=None):
+    def __init__(self, account, store=None, calls=None, contacts=None):
         super().__init__()
         self._account = account
         self._store = store
         self._calls = calls
+        self._contacts = contacts
 
         # Local action group "patch" — the per-digit dial buttons fire
         # `patch.dial-digit("3")` from the .blp. Variant payload is a
@@ -50,6 +52,7 @@ class PatchDialerPage(Adw.Bin):
         self.backspace_button.connect("clicked", self._on_backspace)
         self.call_button.connect("clicked", self._on_call)
         self.message_button.connect("clicked", self._on_message)
+        self.contacts_button.connect("clicked", self._on_contacts)
         self.recent_list.connect("row-activated", self._on_recent_activated)
         # Reformat the number as it changes — same UX as the iOS/
         # Android system dialer. Underlying value (digits + DTMF chars)
@@ -136,6 +139,48 @@ class PatchDialerPage(Adw.Bin):
         # the thread page for this JID (creating the conversation if
         # it's new — see PatchMessagesPage.open_conversation).
         self.activate_action("win.open-conversation", GLib.Variant("s", jid))
+
+    def _on_contacts(self, *_):
+        if self._contacts is None:
+            return
+        all_c = self._contacts.all_contacts()
+        if not all_c:
+            self.activate_action(
+                "win.toast", GLib.Variant("s", "No contacts loaded"))
+            return
+        dialog = Adw.Dialog()
+        dialog.set_title("Contacts")
+        dialog.set_content_width(360)
+        dialog.set_content_height(480)
+        toolbar = Adw.ToolbarView()
+        header = Adw.HeaderBar()
+        toolbar.add_top_bar(header)
+        listbox = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        listbox.add_css_class("boxed-list")
+        # Sort by name.
+        sorted_contacts = sorted(all_c.items(), key=lambda kv: kv[1].lower())
+        for number, name in sorted_contacts:
+            row = Adw.ActionRow(
+                title=name,
+                subtitle=format_as_typed(number),
+                activatable=True,
+            )
+            row.set_use_markup(False)
+            row.set_name(number)
+            row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+            listbox.append(row)
+        def on_activated(_lb, row):
+            num = row.get_name()
+            self._raw_number = num
+            self._render_entry()
+            dialog.force_close()
+        listbox.connect("row-activated", on_activated)
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        scroll.set_child(listbox)
+        toolbar.set_content(scroll)
+        dialog.set_child(toolbar)
+        parent = self.get_root() if isinstance(self.get_root(), Gtk.Window) else None
+        dialog.present(parent)
 
     # -- recent calls ----------------------------------------------------
 

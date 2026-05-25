@@ -98,7 +98,8 @@ class PatchWindow(Adw.ApplicationWindow):
         # page so notification-tap navigation can call into it.
         self._dialer_page    = PatchDialerPage(self._account,
                                                 store=self._store,
-                                                calls=self._calls)
+                                                calls=self._calls,
+                                                contacts=self._contacts)
         self._messages_page  = PatchMessagesPage(self._account, self._store,
                                                   self._xmpp, self._contacts,
                                                   avatars=self._avatars)
