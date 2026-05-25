@@ -51,8 +51,9 @@ class PatchCallDialog(Adw.Dialog):
 
         # Re-render on every state change. CallManager fires call-changed
         # for transitions and call-ended for terminals; both end up here.
-        self._manager.connect("call-changed", self._on_call_event)
-        self._manager.connect("call-ended",   self._on_call_event)
+        self._changed_handler = self._manager.connect("call-changed", self._on_call_event)
+        self._ended_handler = self._manager.connect("call-ended",   self._on_call_event)
+        self.connect("closed", self._on_dialog_closed)
 
         self.accept_button.connect("clicked", lambda *_: self._manager.accept_incoming())
         self.reject_button.connect("clicked", lambda *_: self._manager.reject_incoming())
@@ -96,9 +97,10 @@ class PatchCallDialog(Adw.Dialog):
         # Touch-tone dialpad only makes sense while a call is live.
         self.dtmf_pad.set_visible(active)
         self.in_call_controls.set_visible(active)
-        # The header has no close button — let the user dismiss only
-        # after the session is terminal.
-        self.set_can_close(sess.is_terminal)
+        # Allow close when active (user can switch apps) or terminal.
+        # Only block close during RINGING to prevent accidental dismiss
+        # of the accept/reject buttons.
+        self.set_can_close(active or sess.is_terminal)
 
         # Manage the call-duration ticker. Start once on entry to
         # ACTIVE, stop on any other state.
@@ -146,6 +148,13 @@ class PatchCallDialog(Adw.Dialog):
             self._manager.retract_outgoing()
         else:
             self._manager.hangup()
+
+    def _on_dialog_closed(self, *_):
+        if self._timer_source:
+            GLib.source_remove(self._timer_source)
+            self._timer_source = 0
+        self._manager.disconnect(self._changed_handler)
+        self._manager.disconnect(self._ended_handler)
 
     def _on_mute_toggled(self, button):
         self._manager.set_mic_mute(button.get_active())

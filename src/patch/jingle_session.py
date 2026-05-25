@@ -206,9 +206,9 @@ class JingleSession(GObject.Object):
             self.shutdown()
 
     def shutdown(self) -> None:
-        if self._engine_ready and self.engine is not None:
+        if self.engine is not None:
             self.engine.stop()
-            self._engine_ready = False
+        self._engine_ready = False
 
     def send_dtmf(self, digit: str) -> bool:
         """User pressed a dialpad digit during an active call."""

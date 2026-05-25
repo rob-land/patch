@@ -129,6 +129,7 @@ class XmppClient(GObject.Object):
         # ICE can probe multiple transports; cleared on disconnect.
         self._turn_uris: list[str] = []
         self._turn_uri_fetched_at: float = 0.0
+        self._turn_generation: int = 0
 
     # -- lifecycle --------------------------------------------------------
 
@@ -266,7 +267,11 @@ class XmppClient(GObject.Object):
         if not server or self._client is None:
             GLib.idle_add(lambda: (callback([]), False)[1])
             return
+        self._turn_generation += 1
+        gen = self._turn_generation
         def _on_fetched(uris):
+            if gen != self._turn_generation:
+                return
             if uris:
                 self._turn_uris = uris
                 self._turn_uri_fetched_at = time.monotonic()

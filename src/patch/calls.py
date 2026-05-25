@@ -278,6 +278,8 @@ class CallManager(GObject.Object):
         # session-initiate against that warm engine. Recreate only as a
         # defensive fallback (e.g. session swapped out by a race).
         if self._jingle is None or self._jingle.sid != sess.session_id:
+            if self._jingle is not None:
+                self._jingle.shutdown()
             own_jid_full = self._own_full_jid()
             self._jingle = JingleSession(
                 self._xmpp, sid=sess.session_id,
