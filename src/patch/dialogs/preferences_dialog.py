@@ -1,9 +1,8 @@
 """Preferences dialog — top-level settings surface.
 
 Distinct from the Account dialog (which is the narrow JID + password
-form). Preferences exposes connection diagnostics (the active push
-distributor and endpoint, the log path) and a placeholder calls page
-that documents the audio-not-wired-up limitation.
+form). Preferences exposes connection diagnostics, a calls page, and
+a "Blocked" page where the user can view + unblock numbers.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 
-from gi.repository import Adw, Gio, Gtk
+from gi.repository import Adw, GLib, Gio, Gtk
 
 from patch import APP_ID
 from patch.logging_setup import log_path
@@ -26,12 +25,66 @@ class PatchPreferencesDialog(Adw.PreferencesDialog):
     distributor_row: Adw.ActionRow = Gtk.Template.Child()
     endpoint_row:    Adw.ActionRow = Gtk.Template.Child()
     log_path_row:    Adw.ActionRow = Gtk.Template.Child()
+    blocked_group:   Adw.PreferencesGroup = Gtk.Template.Child()
 
-    def __init__(self):
+    def __init__(self, xmpp=None):
         super().__init__()
+        self._xmpp = xmpp
         settings = Gio.Settings.new(APP_ID)
         dist = settings.get_string("push-distributor") or "(none configured)"
         ep   = settings.get_string("push-endpoint")    or "(not registered yet)"
         self.distributor_row.set_subtitle(dist)
         self.endpoint_row.set_subtitle(ep)
         self.log_path_row.set_subtitle(log_path())
+        GLib.idle_add(self._fetch_block_list)
+
+    def _fetch_block_list(self) -> bool:
+        if self._xmpp is None or self._xmpp._client is None:
+            self._add_blocked_placeholder("Not connected")
+            return False
+        try:
+            module = self._xmpp._client.get_module("Blocking")
+            task = module.request_blocking_list()
+            task.add_done_callback(self._on_block_list)
+        except Exception as exc:  # noqa: BLE001
+            self._add_blocked_placeholder(f"Could not fetch: {exc}")
+        return False
+
+    def _on_block_list(self, task):
+        try:
+            blocked = task.finish()
+        except Exception as exc:  # noqa: BLE001
+            GLib.idle_add(self._add_blocked_placeholder,
+                          f"Failed: {exc}")
+            return
+        GLib.idle_add(self._populate_blocked, blocked)
+
+    def _populate_blocked(self, blocked_jids) -> bool:
+        if not blocked_jids:
+            self._add_blocked_placeholder("No blocked contacts")
+            return False
+        from patch import numfmt
+        for jid in blocked_jids:
+            jid_str = str(jid)
+            number = numfmt.jid_to_number(jid_str, "cheogram.com")
+            display = numfmt.format_for_display(number) if number else jid_str
+            row = Adw.ActionRow(title=display)
+            row.set_use_markup(False)
+            btn = Gtk.Button(label="Unblock", valign=Gtk.Align.CENTER)
+            btn.add_css_class("destructive-action")
+            btn.connect("clicked", self._on_unblock, jid_str, row)
+            row.add_suffix(btn)
+            self.blocked_group.add(row)
+        return False
+
+    def _on_unblock(self, _btn, jid_str, row):
+        if self._xmpp is not None and self._xmpp.unblock(jid_str):
+            self.blocked_group.remove(row)
+
+    def _add_blocked_placeholder(self, text: str) -> bool:
+        label = Gtk.Label(label=text, xalign=0)
+        label.add_css_class("dim-label")
+        label.set_margin_start(16)
+        label.set_margin_top(8)
+        self.blocked_group.add(label)
+        return False

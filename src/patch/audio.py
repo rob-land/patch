@@ -514,6 +514,48 @@ class AudioEngine(GObject.Object):
         "A": 12, "B": 13, "C": 14, "D": 15,
     }
 
+    def set_speaker(self, enabled: bool) -> None:
+        """Route playback to the loudspeaker (True) or back to the
+        default output — typically the earpiece on a phone, speakers on
+        desktop. Probes PulseAudio/PipeWire for a sink with 'speaker'
+        in its description; if none is found (desktop without multiple
+        outputs), the toggle is a no-op."""
+        if self._pipeline is None:
+            return
+        sink = self._pipeline.get_by_name("pb_sink")
+        if sink is None:
+            return
+        if enabled:
+            device = self._find_speaker_device()
+            if device:
+                sink.set_state(Gst.State.NULL)
+                sink.set_property("device", device)
+                sink.sync_state_with_parent()
+                log.info("speaker routed to %s", device)
+        else:
+            sink.set_state(Gst.State.NULL)
+            sink.set_property("device", "")
+            sink.sync_state_with_parent()
+            log.info("speaker routed to default (earpiece)")
+
+    @staticmethod
+    def _find_speaker_device() -> str:
+        """Probe PulseAudio/PipeWire for a loudspeaker sink."""
+        import subprocess
+        try:
+            out = subprocess.check_output(
+                ["pactl", "list", "sinks", "short"],
+                text=True, timeout=2)
+        except Exception:  # noqa: BLE001
+            return ""
+        for line in out.splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 2:
+                name = parts[1]
+                if "speaker" in name.lower() or "Speaker" in name:
+                    return name
+        return ""
+
     def set_mic_mute(self, muted: bool) -> None:
         """Mute/unmute the mic by toggling pulsesrc's mute property.
 

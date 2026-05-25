@@ -162,7 +162,7 @@ class PatchApplication(Adw.Application):
         dialog.present(self.props.active_window)
 
     def _show_preferences(self, *_):
-        dialog = PatchPreferencesDialog()
+        dialog = PatchPreferencesDialog(xmpp=self._xmpp)
         dialog.present(self.props.active_window)
 
     def _show_log(self, *_):

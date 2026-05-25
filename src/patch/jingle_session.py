@@ -222,6 +222,11 @@ class JingleSession(GObject.Object):
             return
         self.engine.set_mic_mute(muted)
 
+    def set_speaker(self, enabled: bool) -> None:
+        if self.engine is None:
+            return
+        self.engine.set_speaker(enabled)
+
     def set_hold(self, hold: bool) -> None:
         """XEP-0166 session-info hold/unhold. Send the IQ and mute the
         mic locally — the peer should stop sending RTP when notified,

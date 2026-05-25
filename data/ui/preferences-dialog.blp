@@ -69,7 +69,17 @@ template $PatchPreferencesDialog: Adw.PreferencesDialog {
 
     Adw.PreferencesGroup {
       title: _("Audio");
-      description: _("Call audio (XEP-0166 Jingle) is not wired up yet. JMI signalling works so the call screen surfaces — but you won't hear or be heard until the Jingle audio pipeline lands.");
+      description: _("Jingle audio via GStreamer webrtcbin. PCMU (G.711 µ-law)\nthrough the cheogram PSTN gateway.");
+    }
+  }
+
+  Adw.PreferencesPage {
+    icon-name: "action-unavailable-symbolic";
+    title: _("Blocked");
+
+    Adw.PreferencesGroup blocked_group {
+      title: _("Blocked contacts");
+      description: _("Numbers you've blocked. Messages and calls from\nblocked contacts are silenced server-side.");
     }
   }
 }

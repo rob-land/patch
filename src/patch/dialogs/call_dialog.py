@@ -26,6 +26,7 @@ class PatchCallDialog(Adw.Dialog):
     in_call_controls: Gtk.Box        = Gtk.Template.Child()
     mute_button:    Gtk.ToggleButton = Gtk.Template.Child()
     hold_button:    Gtk.ToggleButton = Gtk.Template.Child()
+    speaker_button: Gtk.ToggleButton = Gtk.Template.Child()
 
     def __init__(self, manager, session):
         super().__init__()
@@ -60,6 +61,7 @@ class PatchCallDialog(Adw.Dialog):
         self.hangup_button.connect("clicked", lambda *_: self._on_hangup())
         self.mute_button.connect("toggled", self._on_mute_toggled)
         self.hold_button.connect("toggled", self._on_hold_toggled)
+        self.speaker_button.connect("toggled", self._on_speaker_toggled)
 
     def _on_dtmf(self, _action, param):
         digit = param.get_string()
@@ -161,3 +163,6 @@ class PatchCallDialog(Adw.Dialog):
 
     def _on_hold_toggled(self, button):
         self._manager.set_hold(button.get_active())
+
+    def _on_speaker_toggled(self, button):
+        self._manager.set_speaker(button.get_active())

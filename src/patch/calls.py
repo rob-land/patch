@@ -212,6 +212,12 @@ class CallManager(GObject.Object):
             return
         self._jingle.set_mic_mute(muted)
 
+    def set_speaker(self, enabled: bool) -> None:
+        """Route playback to loudspeaker or earpiece. No-op if no call."""
+        if self._jingle is None:
+            return
+        self._jingle.set_speaker(enabled)
+
     def set_hold(self, hold: bool) -> None:
         """XEP-0166 hold/unhold the active call. No-op if no call."""
         if self._jingle is None or self._session is None:
