@@ -219,6 +219,7 @@ class PatchMessagesPage(Adw.Bin):
             subtitle=_truncate(c.get("last_body") or ""),
             activatable=True,
         )
+        row.set_use_markup(False)
         row.set_name(remote_jid)
         row.add_prefix(self._build_avatar_widget(remote_jid, title))
         if c.get("unread"):
@@ -254,6 +255,7 @@ class PatchMessagesPage(Adw.Bin):
                 # only way into a thread is the notification tap.
                 activatable=True,
             )
+            row.set_use_markup(False)
             # Store the JID on the row so the activation handler knows
             # which conversation to open.
             row.set_name(c["remote_jid"])
