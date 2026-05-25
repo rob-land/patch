@@ -51,11 +51,31 @@
       ]
     },
     {
+      "name": "libical",
+      "buildsystem": "cmake-ninja",
+      "config-opts": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DBUILD_SHARED_LIBS=ON",
+        "-DICAL_BUILD_DOCS=OFF",
+        "-DICAL_GLIB=ON",
+        "-DICAL_GLIB_VAPI=OFF",
+        "-DGOBJECT_INTROSPECTION=ON",
+        "-DSHARED_ONLY=ON"
+      ],
+      "cleanup": ["/share/locale"],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/libical/libical/releases/download/v3.0.20/libical-3.0.20.tar.gz",
+          "sha256": "e73de92f5a6ce84c1b00306446b290a2b08cdf0a80988eca0a2c9d5c3510b4c2"
+        }
+      ]
+    },
+    {
       "name": "evolution-data-server",
       "buildsystem": "cmake-ninja",
       "config-opts": [
         "-DCMAKE_BUILD_TYPE=Release",
-        "-DENABLE_CALENDAR=OFF",
         "-DENABLE_CANBERRA=OFF",
         "-DENABLE_FILE_LOCKING=fcntl",
         "-DENABLE_GOA=OFF",
@@ -86,13 +106,6 @@
           "type": "archive",
           "url": "https://download.gnome.org/sources/evolution-data-server/3.58/evolution-data-server-3.58.3.tar.xz",
           "sha256": "da136d1190d9e8b09499452f6058e24eee6b77f441a8c769f74a52451bf379f1"
-        },
-        {
-          "type": "shell",
-          "commands": [
-            "sed -i 's/^pkg_check_modules(CALENDAR REQUIRED/#&/' CMakeLists.txt",
-            "sed -i 's/^set(CALENDAR_CFLAGS.*LIBICAL_GLIB/#&/' CMakeLists.txt"
-          ]
         }
       ]
     },
