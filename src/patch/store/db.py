@@ -113,6 +113,14 @@ class MessageStore:
         """Create the FTS5 full-text index over message bodies if it
         doesn't exist, and wire triggers to keep it in sync."""
         with self._cursor() as cur:
+            # Check if the FTS table already exists — if we're about
+            # to create it for the first time on an existing db, we
+            # need to rebuild the index from the messages table.
+            cur.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type='table' AND name='messages_fts'")
+            fts_existed = cur.fetchone() is not None
+
             cur.executescript("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts
                     USING fts5(body, content=messages, content_rowid=id);
@@ -137,17 +145,17 @@ class MessageStore:
                         VALUES('delete', old.id, old.body);
                 END;
             """)
-            # Rebuild the index if it's empty but messages exist (first
-            # run on an existing db that predates FTS).
+            # Always rebuild at startup. FTS5 external-content tables
+            # can get out of sync if the prior process crashed mid-write
+            # or if the table was created without a rebuild (the initial
+            # bug). For phone-scale volumes (~10k messages) rebuild is
+            # sub-second; for larger stores it's a one-time cost that
+            # subsequent trigger-maintained inserts avoid repeating.
             cur.execute("SELECT COUNT(*) FROM messages")
             msg_count = cur.fetchone()[0]
             if msg_count > 0:
-                cur.execute("SELECT COUNT(*) FROM messages_fts")
-                fts_count = cur.fetchone()[0]
-                if fts_count == 0:
-                    log.info("rebuilding FTS index (%d messages)", msg_count)
-                    cur.execute(
-                        "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+                cur.execute(
+                    "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
 
     @contextmanager
     def _cursor(self) -> Iterator[sqlite3.Cursor]:
