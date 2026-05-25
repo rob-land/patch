@@ -172,14 +172,14 @@ class XmppClient(GObject.Object):
             self._account.set_state(account_mod.STATE_FAILED, f"Invalid JID: {exc}")
             return
 
-        # Unique resource per process: cold-start activations would
-        # otherwise conflict-replace the previous still-hibernated
-        # `patch` resource and evict its queued messages before we have
-        # a chance to receive them. A random suffix keeps each launch
-        # cleanly independent; carbons + MAM cover the cross-resource
-        # delivery we still want.
-        import os
-        resource = f"patch.{os.urandom(4).hex()}"
+        # Fixed resource: a new bind on the same resource conflict-
+        # replaces the prior session, preventing zombie accumulation
+        # (which causes the server to route messages to dead resources
+        # instead of the live one). Any stanzas the old session had
+        # queued via smacks are lost to the conflict-kick, but MAM
+        # catch-up (which runs immediately after every connect)
+        # recovers them — the gap is sub-second on a healthy server.
+        resource = "patch"
         client = NbxClient(log_context="patch")
         client.set_domain(jid.domain)
         client.set_username(jid.localpart)
