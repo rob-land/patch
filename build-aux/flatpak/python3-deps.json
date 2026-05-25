@@ -1,0 +1,102 @@
+{
+  "name": "python3-deps",
+  "buildsystem": "simple",
+  "build-commands": [],
+  "modules": [
+    {
+      "name": "python3-nbxmpp",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"nbxmpp>=4.5\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/d2/23/408243171aa9aaba178d3e2559159c24c1171a641aa83b67bdd3394ead8e/idna-3.15-py3-none-any.whl",
+          "sha256": "048adeaf8c2d788c40fee287673ccaa74c24ffd8dcf09ffa555a2fbb59f10ac8"
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/df/ef/2bfe8af417ab7cdb5e0ee619817725fb8cabaf050a03c244df1c3e5875eb/nbxmpp-7.2.0-py3-none-any.whl",
+          "sha256": "151f98c78708e2d5c1754217faea718daab2ef4f0e53338eaf6eef9cd62b9fe7"
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/c3/9b/b68be6845faedb6fa33c4ffda7741467a8e8aabff82c6a941a0ba2785c3d/precis_i18n-1.1.2-py3-none-any.whl",
+          "sha256": "8e6cce33bdd8cb6289b9e85cdd7be74c30a1111cadb9d759492349c8c10b0840"
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/22/d9/1728840a22a4ef8a8f479b9156aa2943cd98c3907accd3849fb0d5f82bfd/pycairo-1.29.0.tar.gz",
+          "sha256": "f3f7fde97325cae80224c09f12564ef58d0d0f655da0e3b040f5807bd5bd3142"
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/da/61/978c5fbca34f10a90df362502fbb5a005637909e7b5a0e9212349ea9d010/pygobject-3.56.3.tar.gz",
+          "sha256": "12760e4a0e3d04b6eb95e06f7a27e362c826d567ea613373a92c003b6c70d2d6"
+        }
+      ]
+    },
+    {
+      "name": "python3-precis-i18n",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"precis-i18n\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/c3/9b/b68be6845faedb6fa33c4ffda7741467a8e8aabff82c6a941a0ba2785c3d/precis_i18n-1.1.2-py3-none-any.whl",
+          "sha256": "8e6cce33bdd8cb6289b9e85cdd7be74c30a1111cadb9d759492349c8c10b0840"
+        }
+      ]
+    },
+    {
+      "name": "python3-cryptography",
+      "buildsystem": "simple",
+      "build-commands": [
+        "pip3 install --verbose --exists-action=i --no-index --find-links=\"file://${PWD}\" --prefix=${FLATPAK_DEST} \"cryptography>=42\" --no-build-isolation"
+      ],
+      "sources": [
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/98/df/0a1755e750013a2081e863e7cd37e0cdd02664372c754e5560099eb7aa44/cffi-2.0.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "sha256": "c8d3b5532fc71b7a77c09192b4a5a200ea992702734a2e9279a37f2478236f26",
+          "only-arches": [
+            "x86_64"
+          ]
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/a9/f5/a2c23eb03b61a0b8747f211eb716446c826ad66818ddc7810cc2cc19b3f2/cffi-2.0.0-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+          "sha256": "d48a880098c96020b02d5a1f7d9251308510ce8858940e6fa99ece33f610838b",
+          "only-arches": [
+            "aarch64"
+          ]
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/90/04/673510ed51ddff56575f306cf1617d80411ee76831ccd3097599140efdfe/cryptography-48.0.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+          "sha256": "7995ef305d7165c3f11ae07f2517e5a4f1d5c18da1376a0a9ed496336b69e5f3",
+          "only-arches": [
+            "x86_64"
+          ]
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/b2/6e/e90527eef33f309beb811cf7c982c3aeffcce8e3edb178baa4ca3ae4a6fa/cryptography-48.0.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl",
+          "sha256": "f5333311663ea94f75dd408665686aaf426563556bb5283554a3539177e03b8c",
+          "only-arches": [
+            "aarch64"
+          ]
+        },
+        {
+          "type": "file",
+          "url": "https://files.pythonhosted.org/packages/0c/c3/44f3fbbfa403ea2a7c779186dc20772604442dde72947e7d01069cbe98e3/pycparser-3.0-py3-none-any.whl",
+          "sha256": "b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"
+        }
+      ]
+    }
+  ],
+  "sources": []
+}
