@@ -76,7 +76,7 @@ App ID: `land.rob.patch`. License: GPL-3.0-or-later.
   dialog, ringer (feedbackd primary + GStreamer fallback), call
   duration timer, progressive dialer formatting, CSS message bubbles,
   compose-new dialog. Still TODO: DTMF during active call (XEP-0181 /
-  RFC 4733 out-of-band events), MAM pagination fix.
+  RFC 4733 out-of-band events).
 
 ## Sibling pieces
 

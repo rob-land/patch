@@ -101,9 +101,6 @@ class PatchApplication(Adw.Application):
         self.set_accels_for_action("app.quit", ["<Control>q"])
         self.set_accels_for_action("win.show-help-overlay", ["<Control>question"])
 
-        # When the user finishes saving credentials, the account state
-        # flips to DISCONNECTED — that's our cue to try a connect. This
-        # also fires after a manual app.disconnect → reconnect flow.
         self._account.connect("notify::state", self._on_account_state)
 
     def do_startup(self):
@@ -148,14 +145,15 @@ class PatchApplication(Adw.Application):
         self._xmpp.connect_to_server()
 
     def _on_sync_history(self, *_):
-        if self._xmpp.request_history_sync(all_history=True):
+        if self._xmpp.mam_sync_active:
+            self._toast("History sync already in progress")
+        elif self._xmpp.request_history_sync(all_history=True):
             self._toast("Syncing full message history…")
         else:
             self._toast("Connect before syncing history")
 
     def _on_account_state(self, account, _pspec):
-        state = account.state
-        log.debug("account state -> %s", state)
+        log.debug("account state -> %s", account.state)
 
     def _show_account_dialog(self, *_):
         dialog = PatchAccountDialog(self._account)

@@ -124,6 +124,7 @@ class XmppClient(GObject.Object):
         # attempted. Flipped to True the first time connect_to_server is
         # called and back to False on disconnect_from_server.
         self._want_connected = False
+        self._mam_syncing = False
         # XEP-0215 TURN URI cache. Pre-fetched after login so the per-call
         # path doesn't pay the disco round-trip. coturn defaults to 1h
         # credential lifetime; we re-fetch at 30 min to stay comfortably
@@ -466,10 +467,9 @@ class XmppClient(GObject.Object):
         # Warm the TURN URI cache so the first call's audio path doesn't
         # have to wait for an XEP-0215 disco round-trip.
         self.get_turn_uris(lambda _uris: None)
-        # MAM catch-up on by default — paginated via RSM (see
-        # _request_mam_catchup) in pages of MAM_PAGE so the nbxmpp 7.2
-        # large-batch parse issue is sidestepped. PATCH_MAM_CATCHUP=0
-        # to opt OUT (e.g. for debugging).
+        # MAM catch-up on by default — paginated via RSM in pages of
+        # MAM_PAGE so the nbxmpp 7.2 large-batch parse issue is
+        # sidestepped. PATCH_MAM_CATCHUP=0 to opt OUT (e.g. for debugging).
         import os
         if os.environ.get("PATCH_MAM_CATCHUP", "1") == "1":
             self.request_history_sync(
@@ -490,6 +490,7 @@ class XmppClient(GObject.Object):
         # disconnect_from_server() or _on_connection_failed clears it.
         # The TURN URI cache also stays — we're on the same XMPP server
         # so the HMAC credentials remain valid for their TTL.
+        self._mam_syncing = False
         self._account.set_state(account_mod.STATE_DISCONNECTED)
         self.emit("state-changed", account_mod.STATE_DISCONNECTED)
         if self._want_connected:
@@ -952,6 +953,10 @@ class XmppClient(GObject.Object):
     # cursor until complete=True.
     MAM_PAGE = 20
 
+    @property
+    def mam_sync_active(self) -> bool:
+        return self._mam_syncing
+
     def request_history_sync(self, *, all_history: bool = False) -> bool:
         """Request a paginated MAM sync.
 
@@ -959,6 +964,9 @@ class XmppClient(GObject.Object):
         return its full retained archive. Otherwise we resume from the
         latest cached message, falling back to the last day on first run.
         """
+        if self._mam_syncing:
+            log.info("MAM sync already in progress, skipping")
+            return False
         if self._client is None or self._store is None:
             return False
         try:
@@ -991,13 +999,10 @@ class XmppClient(GObject.Object):
         self._mam = mam
         self._mam_jid = own_jid.bare
         self._mam_start = start
+        self._mam_syncing = True
         self._mam_page = 1
         self._mam_query_page(after=None)
         return True
-
-    def _request_mam_catchup(self) -> None:
-        self.request_history_sync(
-            all_history=self._settings.get_boolean("sync-all-history"))
 
     def _mam_query_page(self, after: str | None) -> None:
         """Fire one MAM page; the bound-method callback chains to the
@@ -1014,6 +1019,7 @@ class XmppClient(GObject.Object):
                 query["start"] = self._mam_start
             self._mam.make_query(**query)
         except Exception as exc:  # noqa: BLE001
+            self._mam_syncing = False
             log.warning("MAM page %d failed to dispatch: %s",
                         self._mam_page, exc)
 
@@ -1022,6 +1028,7 @@ class XmppClient(GObject.Object):
         try:
             result = task.finish()
         except Exception as exc:  # noqa: BLE001
+            self._mam_syncing = False
             log.warning("MAM page %d failed: %s", page, exc)
             return
         complete = bool(getattr(result, "complete", False))
@@ -1032,6 +1039,7 @@ class XmppClient(GObject.Object):
                  page, complete,
                  (last[:12] + "...") if last else last)
         if complete or not last:
+            self._mam_syncing = False
             log.info("MAM catch-up done (%d page%s)",
                      page, "" if page == 1 else "s")
             return
