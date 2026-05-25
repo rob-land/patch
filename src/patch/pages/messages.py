@@ -149,6 +149,40 @@ class PatchMessagesPage(Adw.Bin):
 
     # -- conversation list -----------------------------------------------
 
+    def _update_conversation_for(self, remote_jid: str) -> None:
+        """Incremental update: refresh just one conversation row and
+        move it to the top (most-recent-first). O(1) per message
+        instead of the full O(n) rebuild."""
+        c = self._store.conversation_for(remote_jid)
+        if c is None:
+            return
+        # Remove the existing row for this JID (if any).
+        child = self.conversations_list.get_first_child()
+        while child is not None:
+            nxt = child.get_next_sibling()
+            if child.get_name() == remote_jid:
+                self.conversations_list.remove(child)
+                break
+            child = nxt
+        # Build a fresh row and prepend (most-recent goes first).
+        gateway = self._account.gateway
+        title = self._display_name_for(remote_jid, gateway)
+        row = Adw.ActionRow(
+            title=title,
+            subtitle=_truncate(c.get("last_body") or ""),
+            activatable=True,
+        )
+        row.set_name(remote_jid)
+        row.add_prefix(self._build_avatar_widget(remote_jid, title))
+        if c.get("unread"):
+            badge = Gtk.Label(label=str(c["unread"]))
+            badge.add_css_class("numeric")
+            badge.add_css_class("accent")
+            row.add_suffix(badge)
+        row.add_suffix(Gtk.Image.new_from_icon_name("go-next-symbolic"))
+        self.conversations_list.prepend(row)
+        self.messages_stack.set_visible_child_name("list")
+
     def _refresh_conversation_list(self) -> None:
         convs = self._store.conversations()
         # Clear existing rows.
@@ -217,8 +251,9 @@ class PatchMessagesPage(Adw.Bin):
                 start_edit=self._start_edit,
                 by_xmpp_id=by_xmpp_id))
         self._store.mark_read(remote_jid)
-        # Refresh the conversations list so unread badges clear.
-        self._refresh_conversation_list()
+        # Incremental refresh so the unread badge clears without
+        # tearing down the entire list.
+        self._update_conversation_for(remote_jid)
         self.nav.push(self.thread_page)
 
     def _on_compose_activate(self, *_):
@@ -319,6 +354,18 @@ class PatchMessagesPage(Adw.Bin):
 
     # -- outbound attach -------------------------------------------------
 
+    def _set_uploading(self, active: bool) -> None:
+        """Toggle the compose area into "uploading" state — disable
+        inputs and show a progress hint so the user knows the PUT is
+        in flight."""
+        self.attach_button.set_sensitive(not active)
+        self.send_button.set_sensitive(not active)
+        self.compose_entry.set_sensitive(not active)
+        if active:
+            self.compose_entry.set_placeholder_text("Uploading…")
+        else:
+            self.compose_entry.set_placeholder_text("Message")
+
     def _on_attach_clicked(self, *_):
         if not self._open_jid:
             return
@@ -369,11 +416,12 @@ class PatchMessagesPage(Adw.Bin):
             return
         log.info("requesting upload slot for %s (%d bytes, %s) via %s",
                  filename, size, ctype, upload_jid)
+        self._set_uploading(True)
 
-        # Capture into closure: we need the path again at PUT time.
         def on_slot(put_url, get_url, headers, error):
             if error or not put_url:
                 log.warning("upload slot failed: %s", error)
+                self._set_uploading(False)
                 self.activate_action(
                     "win.toast",
                     GLib.Variant("s", "Upload slot request failed"))
@@ -417,6 +465,7 @@ class PatchMessagesPage(Adw.Bin):
         message.set_request_body_from_bytes(ctype, GLib.Bytes.new(data))
 
         def on_put(_sess, result):
+            self._set_uploading(False)
             try:
                 _ = session.send_and_read_finish(result)
             except GLib.Error as exc:
@@ -464,7 +513,7 @@ class PatchMessagesPage(Adw.Bin):
     def _on_message_corrected(self, _xmpp, _target_id, conv_jid, _new_body, _ts):
         if self._open_jid == conv_jid:
             self._open_thread(conv_jid)
-        self._refresh_conversation_list()
+        self._update_conversation_for(conv_jid)
 
     def _send_reaction(self, target_id: str, emojis: list[str]) -> None:
         if not self._open_jid:
@@ -515,7 +564,7 @@ class PatchMessagesPage(Adw.Bin):
                     start_reply=self._start_reply,
                     start_edit=self._start_edit))
             self._store.mark_read(remote_jid)
-        self._refresh_conversation_list()
+        self._update_conversation_for(remote_jid)
 
     # -- display helpers --------------------------------------------------
 

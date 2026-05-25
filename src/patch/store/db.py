@@ -251,6 +251,34 @@ class MessageStore:
 
     # -- reads -----------------------------------------------------------
 
+    def conversation_for(self, remote_jid: str) -> dict | None:
+        """Single-conversation summary (same shape as conversations())."""
+        with self._cursor() as cur:
+            cur.execute("""
+                SELECT remote_jid,
+                       MAX(timestamp) AS last_ts,
+                       SUM(CASE WHEN read=0 AND incoming=1 THEN 1 ELSE 0 END) AS unread
+                FROM   messages
+                WHERE  remote_jid=?
+                GROUP BY remote_jid
+            """, (remote_jid,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            c = dict(row)
+            cur.execute("""
+                SELECT body, incoming
+                FROM   messages
+                WHERE  remote_jid=?
+                ORDER  BY timestamp DESC
+                LIMIT  1
+            """, (remote_jid,))
+            body_row = cur.fetchone()
+            if body_row:
+                c["last_body"] = body_row["body"]
+                c["last_incoming"] = bool(body_row["incoming"])
+            return c
+
     def conversations(self) -> list[dict]:
         """One row per remote_jid, with the latest message preview + unread count.
 
