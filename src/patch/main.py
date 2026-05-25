@@ -10,6 +10,7 @@ from patch import account as account_mod
 from patch.account import Account
 from patch.avatars import AvatarManager
 from patch.calls import CallManager
+from patch.calls_dbus import CallsDBusService, gnome_calls_is_active
 from patch.dialogs.adhoc_dialog import PatchAdHocDialog
 from patch.contacts import ContactsManager
 from patch.dialogs.account_dialog import PatchAccountDialog
@@ -56,6 +57,10 @@ class PatchApplication(Adw.Application):
                                           contacts=self._contacts,
                                           store=self._store)
         self._push          = PushController(self._account, self._xmpp)
+        # Expose the Calls1 D-Bus interface so gnome-calls (or any
+        # external consumer) can drive the call engine over D-Bus.
+        self._calls_dbus = CallsDBusService(self._calls, self._account)
+        self._calls_dbus.publish()
         # Auto-present the call dialog when a new session starts. Lives
         # on the Application (not the window) so cold-start activated
         # incoming calls have a screen even before the window is built.
@@ -175,6 +180,12 @@ class PatchApplication(Adw.Application):
         dialog.present(self.props.active_window)
 
     def _on_call_started(self, _manager, session, _direction):
+        # If gnome-calls is active on the bus, it drives the call UI
+        # via our Calls1 D-Bus interface — don't present the built-in
+        # dialog or we'd have two competing UIs for the same session.
+        if gnome_calls_is_active():
+            log.debug("gnome-calls active — suppressing built-in call dialog")
+            return
         win = self.props.active_window
         if win is None:
             # Incoming call on a cold-started instance — bring the window

@@ -23,6 +23,7 @@ python.install_sources(
     'audio.py',
     'avatars.py',
     'calls.py',
+    'calls_dbus.py',
     'contacts.py',
     'jingle_session.py',
     'logging_setup.py',
