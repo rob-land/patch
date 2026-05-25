@@ -762,6 +762,22 @@ class XmppClient(GObject.Object):
             if req is not None:
                 self._send_receipt(from_str, msg_id)
 
+    # -- XEP-0085 Chat State outbound ------------------------------------
+
+    def send_chat_state(self, to_jid: str, state: str) -> None:
+        """Send a standalone chat state notification (composing, paused,
+        active, inactive, gone). These are body-less messages with a
+        no-store hint so MAM doesn't archive ephemeral typing states."""
+        if not self._client or not self._client.is_stream_authenticated:
+            return
+        msg = Message(to=to_jid, typ="chat")
+        msg.addChild(state, namespace=Namespace.CHATSTATES)
+        msg.addChild("no-store", namespace=Namespace.HINTS)
+        try:
+            self._client.send_stanza(msg)
+        except Exception:  # noqa: BLE001
+            pass
+
     # -- XEP-0444 Reactions ---------------------------------------------
 
     def send_reaction(self, to_jid: str, target_msg_id: str,

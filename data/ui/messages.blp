@@ -80,6 +80,12 @@ template $PatchMessagesPage: Adw.Bin {
           show-end-title-buttons: false;
           title-widget: Adw.WindowTitle thread_title {};
 
+          [start]
+          Adw.Avatar thread_avatar {
+            size: 32;
+            show-initials: true;
+          }
+
           // Thread overflow — block, etc.
           [end]
           Gtk.MenuButton thread_menu_button {

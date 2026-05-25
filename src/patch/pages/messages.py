@@ -38,6 +38,7 @@ class PatchMessagesPage(Adw.Bin):
     messages_stack:    Gtk.Stack          = Gtk.Template.Child()
     conversations_list: Gtk.ListBox       = Gtk.Template.Child()
     search_entry:      Gtk.SearchEntry    = Gtk.Template.Child()
+    thread_avatar:     Adw.Avatar         = Gtk.Template.Child()
     thread_title:      Adw.WindowTitle    = Gtk.Template.Child()
     thread_list:       Gtk.ListBox        = Gtk.Template.Child()
     compose_entry:     Gtk.Entry          = Gtk.Template.Child()
@@ -103,6 +104,14 @@ class PatchMessagesPage(Adw.Bin):
         # re-render the open thread so the edited bubble + caption
         # appear.
         self._xmpp.connect("message-corrected", self._on_message_corrected)
+        # XEP-0085 chat states: show "typing…" in the thread title
+        # when the peer sends composing; clear on active/paused/gone.
+        self._xmpp.connect("chat-state", self._on_chat_state)
+        # Outbound typing detection: track compose entry changes to
+        # send composing/paused to the peer (throttled).
+        self.compose_entry.connect("changed", self._on_compose_text_changed)
+        self._composing_sent = False
+        self._composing_timeout: int = 0
         # When the contacts index rebuilds, redraw the conversation list
         # so number-only rows pick up the freshly-resolved name.
         if self._contacts is not None:
@@ -279,8 +288,21 @@ class PatchMessagesPage(Adw.Bin):
 
     def _open_thread(self, remote_jid: str) -> None:
         self._open_jid = remote_jid
-        self.thread_title.set_title(
-            self._display_name_for(remote_jid, self._account.gateway))
+        name = self._display_name_for(remote_jid, self._account.gateway)
+        self.thread_title.set_title(name)
+        self.thread_title.set_subtitle("")
+        # Update the thread header avatar.
+        self.thread_avatar.set_text(name or remote_jid)
+        self.thread_avatar.set_custom_image(None)
+        if self._avatars is not None and not numfmt.is_group_jid(remote_jid):
+            path = self._avatars.path_for(remote_jid)
+            if path:
+                try:
+                    from gi.repository import Gdk
+                    texture = Gdk.Texture.new_from_filename(path)
+                    self.thread_avatar.set_custom_image(texture)
+                except Exception:  # noqa: BLE001
+                    pass
         # Repopulate the thread list.
         while True:
             child = self.thread_list.get_first_child()
@@ -328,6 +350,12 @@ class PatchMessagesPage(Adw.Bin):
         # Reply / correction consumed — clear the pending state + pill.
         self._clear_reply()
         self._correction_pending = ""
+        # Composing state already sent as <active/> inside the message
+        # body; clear the local flag so next keystroke re-triggers.
+        self._composing_sent = False
+        if self._composing_timeout:
+            GLib.source_remove(self._composing_timeout)
+            self._composing_timeout = 0
 
     def _start_reply(self, target_id: str, target_body: str) -> None:
         """Stage a XEP-0461 reply to ``target_id``. Renders a pill
@@ -564,6 +592,42 @@ class PatchMessagesPage(Adw.Bin):
             self._open_thread(conv_jid)
         self._update_conversation_for(conv_jid)
 
+    # -- typing indicators -----------------------------------------------
+
+    def _on_chat_state(self, _xmpp, remote_jid, state):
+        if self._open_jid != remote_jid:
+            return
+        name = self._display_name_for(remote_jid, self._account.gateway)
+        if state == "composing":
+            self.thread_title.set_subtitle("typing…")
+        else:
+            self.thread_title.set_subtitle("")
+
+    def _on_compose_text_changed(self, entry):
+        if not self._open_jid:
+            return
+        text = entry.get_text()
+        if text and not self._composing_sent:
+            self._xmpp.send_chat_state(self._open_jid, "composing")
+            self._composing_sent = True
+        # Reset the paused timer on every keystroke.
+        if self._composing_timeout:
+            GLib.source_remove(self._composing_timeout)
+            self._composing_timeout = 0
+        if text:
+            self._composing_timeout = GLib.timeout_add_seconds(
+                3, self._send_paused)
+        elif self._composing_sent:
+            self._xmpp.send_chat_state(self._open_jid, "active")
+            self._composing_sent = False
+
+    def _send_paused(self) -> bool:
+        self._composing_timeout = 0
+        if self._open_jid and self._composing_sent:
+            self._xmpp.send_chat_state(self._open_jid, "paused")
+            self._composing_sent = False
+        return False
+
     def _send_reaction(self, target_id: str, emojis: list[str]) -> None:
         if not self._open_jid:
             return
@@ -581,6 +645,9 @@ class PatchMessagesPage(Adw.Bin):
 
     def _on_message_received(self, _xmpp, remote_jid, body, incoming, timestamp,
                              attachment_url, message_id, reply_to_id):
+        # Clear "typing…" when a message arrives from the peer.
+        if incoming and self._open_jid == remote_jid:
+            self.thread_title.set_subtitle("")
         # The MessagePersister (app-level, always alive) writes to the
         # store regardless of whether this page exists. Here we only do
         # view-side work — for an open thread we either re-render so the
