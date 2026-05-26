@@ -75,16 +75,19 @@ App ID: `land.rob.patch`. License: GPL-3.0-or-later.
   persisted call log, status banner, real app icon, real Preferences
   dialog, ringer (feedbackd primary + GStreamer fallback), call
   duration timer, progressive dialer formatting, CSS message bubbles,
-  compose-new dialog. Still TODO: DTMF during active call (XEP-0181 /
-  RFC 4733 out-of-band events).
+  compose-new dialog, DTMF during active call (RFC 4733
+  telephone-event via rtpdtmfsrc, PT 101).
 
 ## Sibling pieces
 
-- `plugin/` — scaffold of a future gnome-calls C plugin (libpeas-2
-  shared module). Stubs that compile against `libcalls` on a Phosh
-  target; lays out `CallsProvider`/`CallsOrigin`/`CallsCall` and
-  documents the `land.rob.patch.Calls1` D-Bus surface Patch will
-  expose for it to drive.
+- `plugin/` — gnome-calls C plugin (libpeas-2 shared module).
+  Functionally complete: `CallsProvider` subclass with
+  `g_bus_watch_name` for Patch, `CallsOrigin` interface impl with
+  `dial`/`call-added`/`call-removed`, `CallsCall` subclass with
+  `answer`/`hang_up`/`send_dtmf_tone`/`get_protocol`. Compiles and
+  loads on FuriOS FLX1s (gnome-calls 48.1); build requires
+  gnome-calls source headers (`-Dcalls_source_dir=`). Patch-side
+  D-Bus surface (`calls_dbus.py`) is production-ready.
 
 ## Companion server module
 

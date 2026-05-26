@@ -6,6 +6,26 @@
  * pages/messages._render_thread_row.
  */
 
+/* Calls-style dialer controls: rounded like pill buttons, but without
+   Adwaita's generous pill minimum width. */
+.patch-dial-button,
+.patch-round-button {
+    border-radius: 9999px;
+    min-width: 0;
+}
+
+.patch-dial-button {
+    padding: 12px 24px;
+}
+
+.patch-round-button {
+    padding: 8px 12px;
+}
+
+.phone-number-entry {
+    font-size: 24px;
+}
+
 /* Outer bubble container — both inbound and outbound. */
 .patch-bubble {
     padding: 10px 12px;

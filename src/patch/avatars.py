@@ -97,7 +97,7 @@ class AvatarManager(GObject.Object):
         if not sha:
             return
         from_jid = stanza.getAttr("from") or ""
-        bare = from_jid.split("/", 1)[0]
+        bare = str(from_jid).split("/", 1)[0]
         if not bare:
             return
         metadata = item.getTag("metadata", namespace=Namespace.AVATAR_METADATA)

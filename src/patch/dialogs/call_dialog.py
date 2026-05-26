@@ -1,4 +1,4 @@
-"""Active-call dialog. Pure XEP-0353 JMI signalling — no audio yet."""
+"""Active-call dialog."""
 
 from __future__ import annotations
 

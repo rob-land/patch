@@ -419,6 +419,17 @@ class AudioEngine(GObject.Object):
         if not self._funnel.link(self._webrtc):
             log.warning("failed to link audio funnel into webrtcbin")
             return False
+        # Ensure webrtcbin has an audio transceiver even if caps
+        # haven't flowed through the pipeline yet. Without this,
+        # create_offer returns an empty SDP on fast back-to-back calls
+        # where pulsesrc hasn't pushed its first buffer.
+        audio_caps = Gst.Caps.from_string(
+            "application/x-rtp,media=audio,encoding-name=PCMU,"
+            "payload=0,clock-rate=8000")
+        self._webrtc.emit(
+            "add-transceiver",
+            GstWebRTC.WebRTCRTPTransceiverDirection.SENDRECV,
+            audio_caps)
         # Playback: pad-added → rtppcmudepay → mulawdec → pulsesink.
         self._webrtc.connect("pad-added", self._on_pad_added)
         self._webrtc.connect("on-ice-candidate", self._on_ice_candidate)

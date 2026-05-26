@@ -6,6 +6,7 @@
 #pragma once
 
 #include <calls-call.h>
+#include <gio/gio.h>
 
 G_BEGIN_DECLS
 
@@ -15,6 +16,7 @@ G_DECLARE_FINAL_TYPE(CallsXmppCall, calls_xmpp_call,
 
 CallsXmppCall *calls_xmpp_call_new(const char *session_id,
                                    const char *peer_number,
+                                   const char *display_name,
                                    gboolean inbound);
 
 void calls_xmpp_call_set_proxy(CallsXmppCall *self, GDBusProxy *proxy);

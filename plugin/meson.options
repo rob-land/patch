@@ -1,0 +1,2 @@
+option('calls_source_dir', type: 'string', value: '',
+       description: 'Path to gnome-calls source tree (for plugin headers)')

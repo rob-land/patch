@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 
-from gi.repository import GObject
+from gi.repository import GLib, GObject
 
 from patch.audio import AudioEngine, sdp_to_jingle_description, jingle_content_to_sdp
 from patch.xmpp import jingle as jingle_mod
@@ -63,6 +63,7 @@ class JingleSession(GObject.Object):
         self._local_sdp_sent = False
         # Deferred work that needs to run AFTER the engine is built.
         self._on_engine_ready: list = []
+        self._turn_pending = False
 
     # -- pre-warm -------------------------------------------------------
 
@@ -82,8 +83,11 @@ class JingleSession(GObject.Object):
     # -- outgoing flow --------------------------------------------------
 
     def start_outgoing(self) -> None:
-        self._with_engine(lambda: self.engine.create_offer(
-            self._send_session_initiate))
+        def _do_offer():
+            log.info("creating outgoing offer (engine_ready=%s)",
+                     self._engine_ready)
+            self.engine.create_offer(self._send_session_initiate)
+        self._with_engine(_do_offer)
 
     def _send_session_initiate(self, sdp_text: str) -> None:
         log.info("local offer SDP ready (%d bytes):\n%s",
@@ -298,15 +302,9 @@ class JingleSession(GObject.Object):
             work()
             return
         self._on_engine_ready.append(work)
-        if self.engine is not None:
-            # Engine build is in flight from a prior call — work will
-            # run once it's ready.
+        if self.engine is not None or self._turn_pending:
             return
-        # XmppClient pre-fetches the TURN URIs on login and caches them
-        # for ~30 min, so this is usually a synchronous hit. Falls back
-        # to a fresh disco IQ when the cache is empty or expired. The
-        # list carries UDP/TCP/TURNS in preference order so ICE can
-        # relay via TCP when UDP/3478 is blocked.
+        self._turn_pending = True
         self._xmpp.get_turn_uris(self._on_turn_resolved)
 
     def _on_turn_resolved(self, turn_uris):
@@ -319,9 +317,13 @@ class JingleSession(GObject.Object):
             log.warning("audio engine failed to start")
             return
         self._engine_ready = True
-        for work in self._on_engine_ready:
-            try:
-                work()
-            except Exception as exc:  # noqa: BLE001
-                log.exception("deferred jingle work failed: %s", exc)
+        pending = list(self._on_engine_ready)
         self._on_engine_ready.clear()
+        def _run_deferred():
+            for work in pending:
+                try:
+                    work()
+                except Exception as exc:  # noqa: BLE001
+                    log.exception("deferred jingle work failed: %s", exc)
+            return False
+        GLib.idle_add(_run_deferred)

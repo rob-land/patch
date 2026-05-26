@@ -53,9 +53,6 @@ class PatchWindow(Adw.ApplicationWindow):
         self._contacts = contacts
         self._avatars = avatars
 
-        # Persisted window geometry. get_default_size() returns the
-        # configured default, not the live size — get_width/height per
-        # STYLE_GUIDE so user resizes actually save.
         self.set_default_size(
             self._settings.get_int("window-width"),
             self._settings.get_int("window-height"),

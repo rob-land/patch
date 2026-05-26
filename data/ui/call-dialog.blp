@@ -3,14 +3,10 @@ using Adw 1;
 
 // Active-call screen. Shows the peer's number/contact, the current state
 // of the call, and Accept/Reject (incoming-ringing) or Hangup (active/
-// proposing). Audio is not wired up yet — XEP-0353 JMI signalling only.
-//
-// Note: Adw.Dialog so this surfaces over the main window without
-// disrupting the navigation stack. Once we have a real gnome-calls
-// integration, this view will be replaced by gnome-calls' own active-
-// call shell.
+// proposing). Adw.Dialog so this surfaces over the main window without
+// disrupting the navigation stack.
 template $PatchCallDialog: Adw.Dialog {
-  content-width: 380;
+  content-width: 340;
   content-height: 560;
   can-close: false;
 

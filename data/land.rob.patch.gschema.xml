@@ -2,11 +2,11 @@
 <schemalist>
   <schema id="land.rob.patch" path="/land/rob/patch/">
     <key name="window-width" type="i">
-      <default>640</default>
+      <default>360</default>
       <summary>Window width in pixels</summary>
     </key>
     <key name="window-height" type="i">
-      <default>480</default>
+      <default>760</default>
       <summary>Window height in pixels</summary>
     </key>
     <key name="window-maximized" type="b">
