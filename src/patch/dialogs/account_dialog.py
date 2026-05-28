@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from gi.repository import Adw, Gio, Gtk
+from gi.repository import Adw, Gdk, Gio, Gtk
 
 from patch import account as account_mod
 
@@ -19,11 +19,13 @@ log = logging.getLogger(__name__)
 class PatchAccountDialog(Adw.PreferencesDialog):
     __gtype_name__ = "PatchAccountDialog"
 
-    jid_row:      Adw.EntryRow         = Gtk.Template.Child()
-    password_row: Adw.PasswordEntryRow = Gtk.Template.Child()
-    host_row:     Adw.EntryRow         = Gtk.Template.Child()
-    save_button:  Gtk.Button           = Gtk.Template.Child()
-    status_label: Gtk.Label            = Gtk.Template.Child()
+    jid_row:              Adw.EntryRow         = Gtk.Template.Child()
+    password_row:         Adw.PasswordEntryRow = Gtk.Template.Child()
+    host_row:             Adw.EntryRow         = Gtk.Template.Child()
+    jid_paste_button:     Gtk.Button           = Gtk.Template.Child()
+    password_paste_button: Gtk.Button          = Gtk.Template.Child()
+    save_button:          Gtk.Button           = Gtk.Template.Child()
+    status_label:         Gtk.Label            = Gtk.Template.Child()
 
     def __init__(self, account):
         super().__init__()
@@ -63,6 +65,11 @@ class PatchAccountDialog(Adw.PreferencesDialog):
         self._error_handler = account.connect("notify::last-error",
                                               self._on_account_state_changed)
         self.connect("closed", self._on_closed)
+
+        self.jid_paste_button.connect("clicked",
+            lambda *_: self._paste_into(self.jid_row))
+        self.password_paste_button.connect("clicked",
+            lambda *_: self._paste_into(self.password_row))
 
     def _on_save(self, *_):
         jid = self.jid_row.get_text().strip()
@@ -108,6 +115,21 @@ class PatchAccountDialog(Adw.PreferencesDialog):
         if self._error_handler:
             self._account.disconnect(self._error_handler)
             self._error_handler = 0
+
+    def _paste_into(self, row) -> None:
+        display = self.get_display() or Gdk.Display.get_default()
+        if display is None:
+            return
+        clipboard = display.get_clipboard()
+        clipboard.read_text_async(None, self._on_paste_ready, row)
+
+    def _on_paste_ready(self, clipboard, result, row):
+        try:
+            text = clipboard.read_text_finish(result)
+        except Exception:  # noqa: BLE001
+            return
+        if text:
+            row.set_text(text.strip())
 
     def _set_status(self, msg: str) -> None:
         self.status_label.set_text(msg)

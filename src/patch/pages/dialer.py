@@ -62,6 +62,7 @@ class PatchDialerPage(Adw.Bin):
         self._suppress_reformat = False
         self._raw_number = ""
         self.number_entry.connect("notify::text", self._on_entry_changed)
+        self.number_entry.connect("icon-press", self._on_paste_icon)
 
         if self._calls is not None:
             # Refresh the recents whenever a call terminates (the manager
@@ -86,6 +87,24 @@ class PatchDialerPage(Adw.Bin):
             return
         self._raw_number = self._raw_number[:-1]
         self._render_entry()
+
+    def _on_paste_icon(self, _entry, _pos):
+        display = self.get_display()
+        if display is None:
+            return
+        clipboard = display.get_clipboard()
+        clipboard.read_text_async(None, self._on_paste_ready)
+
+    def _on_paste_ready(self, clipboard, result):
+        try:
+            text = clipboard.read_text_finish(result)
+        except Exception:  # noqa: BLE001
+            return
+        if text:
+            cleaned = "".join(c for c in text.strip() if c.isdigit() or c in "+*#")
+            if cleaned:
+                self._raw_number = cleaned
+                self._render_entry()
 
     def _on_entry_changed(self, *_):
         if self._suppress_reformat:

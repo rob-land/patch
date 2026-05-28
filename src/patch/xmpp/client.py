@@ -176,14 +176,18 @@ class XmppClient(GObject.Object):
             self._account.set_state(account_mod.STATE_FAILED, f"Invalid JID: {exc}")
             return
 
-        # Fixed resource: a new bind on the same resource conflict-
-        # replaces the prior session, preventing zombie accumulation
-        # (which causes the server to route messages to dead resources
-        # instead of the live one). Any stanzas the old session had
-        # queued via smacks are lost to the conflict-kick, but MAM
-        # catch-up (which runs immediately after every connect)
-        # recovers them — the gap is sub-second on a healthy server.
-        resource = "patch"
+        # Per-install resource: stable across runs on the same device,
+        # unique across installs so two devices (e.g. phone + tablet)
+        # don't conflict-kick each other. Same-device reconnects still
+        # replace the prior session (preventing zombie accumulation).
+        # The suffix is generated once and persisted in gsettings.
+        import secrets
+        settings = Gio.Settings.new(APP_ID)
+        suffix = settings.get_string("resource-id")
+        if not suffix:
+            suffix = secrets.token_hex(4)
+            settings.set_string("resource-id", suffix)
+        resource = f"patch.{suffix}"
         client = NbxClient(log_context="patch")
         client.set_domain(jid.domain)
         client.set_username(jid.localpart)

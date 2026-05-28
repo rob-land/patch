@@ -15,10 +15,26 @@ template $PatchAccountDialog: Adw.PreferencesDialog {
       Adw.EntryRow jid_row {
         title: _("JID");
         input-purpose: email;
+
+        [suffix]
+        Gtk.Button jid_paste_button {
+          icon-name: "edit-paste-symbolic";
+          tooltip-text: _("Paste");
+          valign: center;
+          styles ["flat"]
+        }
       }
 
       Adw.PasswordEntryRow password_row {
         title: _("Password");
+
+        [suffix]
+        Gtk.Button password_paste_button {
+          icon-name: "edit-paste-symbolic";
+          tooltip-text: _("Paste");
+          valign: center;
+          styles ["flat"]
+        }
       }
     }
 

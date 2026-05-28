@@ -41,5 +41,9 @@
       <default>""</default>
       <summary>Last UnifiedPush endpoint URL registered with the server</summary>
     </key>
+    <key name="resource-id" type="s">
+      <default>""</default>
+      <summary>Per-install XMPP resource suffix (generated on first connect)</summary>
+    </key>
   </schema>
 </schemalist>

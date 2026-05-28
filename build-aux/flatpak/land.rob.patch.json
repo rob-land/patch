@@ -55,6 +55,7 @@
       "buildsystem": "cmake-ninja",
       "config-opts": [
         "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_INSTALL_LIBDIR=lib",
         "-DBUILD_SHARED_LIBS=ON",
         "-DICAL_BUILD_DOCS=OFF",
         "-DICAL_GLIB=ON",

@@ -5,58 +5,50 @@
       <stop offset="0%" stop-color="#62a0ea"/>
       <stop offset="100%" stop-color="#1c71d8"/>
     </linearGradient>
-    <linearGradient id="patchHi" x1="0%" y1="0%" x2="0%" y2="100%">
-      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.96"/>
-      <stop offset="100%" stop-color="#ffffff" stop-opacity="0.80"/>
-    </linearGradient>
   </defs>
 
-  <!-- GNOME-style rounded square canvas -->
   <rect width="128" height="128" rx="28" ry="28" fill="url(#bg)"/>
 
-  <!-- Phone handset (classic dialer reference), rotated like the
-       standard Adwaita call-start glyph. -->
-  <g transform="rotate(-30 64 64)">
-    <path d="
-      M 36 44
-      C 36 38, 42 34, 48 34
-      L 56 34
-      C 60 34, 64 38, 64 42
-      L 64 50
-      C 64 56, 60 60, 56 60
-      L 54 60
-      L 80 86
-      L 78 88
-      C 74 92, 68 92, 64 88
-      L 38 62
-      C 36 60, 36 58, 36 56
-      Z
-      M 88 86
-      L 80 78
-      C 82 76, 86 76, 90 76
-      L 96 76
-      C 100 76, 104 80, 104 84
-      L 104 92
-      C 104 96, 100 100, 96 100
-      L 88 100
-      C 84 100, 80 96, 80 92
-      Z"
-      fill="url(#patchHi)"
-    />
+  <g fill="#ffffff">
+    <!-- Phone body: rounded trapezoidal base. -->
+    <path d="M 26 60
+             C 26 51, 32 47, 40 47
+             L 88 47
+             C 96 47, 102 51, 102 60
+             L 108 104
+             C 108 108, 104 110, 100 110
+             L 28 110
+             C 24 110, 20 108, 20 104
+             Z"/>
+
+    <!-- Handset: dog-bone with two earpiece bulbs and a bar. -->
+    <circle cx="30" cy="30" r="13"/>
+    <circle cx="98" cy="30" r="13"/>
+    <rect x="30" y="24" width="68" height="12" rx="3"/>
   </g>
 
-  <!-- 'Patch' / bandage diagonal across the handset. Two small white
-       dots evoke bandage adhesive pads — a literal reading of the
-       project name. -->
-  <g>
-    <rect x="32" y="86" width="64" height="12" rx="3"
-          transform="rotate(-22 64 92)"
-          fill="#ffffff" opacity="0.42"/>
-    <circle cx="40" cy="90" r="2.2"
-            transform="rotate(-22 64 92)"
-            fill="#ffffff" opacity="0.85"/>
-    <circle cx="88" cy="98" r="2.2"
-            transform="rotate(-22 64 92)"
-            fill="#ffffff" opacity="0.85"/>
+  <!-- Rotary dial: ring with finger holes around the perimeter and a
+       center hub. Drawn in the background blue so it reads as a
+       cut-out of the white body. -->
+  <g fill="#1c71d8">
+    <circle cx="64" cy="80" r="18"/>
+  </g>
+  <g fill="#ffffff">
+    <circle cx="64" cy="80" r="14"/>
+  </g>
+  <g fill="#1c71d8">
+    <!-- 10 finger holes around the dial face. -->
+    <circle cx="64" cy="69" r="1.6"/>
+    <circle cx="71.5" cy="71" r="1.6"/>
+    <circle cx="76" cy="76.5" r="1.6"/>
+    <circle cx="77.5" cy="83.5" r="1.6"/>
+    <circle cx="74.5" cy="89.5" r="1.6"/>
+    <circle cx="68" cy="91" r="1.6"/>
+    <circle cx="60" cy="91" r="1.6"/>
+    <circle cx="53.5" cy="89.5" r="1.6"/>
+    <circle cx="50.5" cy="83.5" r="1.6"/>
+    <circle cx="52" cy="76.5" r="1.6"/>
+    <!-- Center hub. -->
+    <circle cx="64" cy="80" r="3.5"/>
   </g>
 </svg>
