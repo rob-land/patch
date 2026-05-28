@@ -99,10 +99,10 @@ class PatchCallDialog(Adw.Dialog):
         # Touch-tone dialpad only makes sense while a call is live.
         self.dtmf_pad.set_visible(active)
         self.in_call_controls.set_visible(active)
-        # Allow close when active (user can switch apps) or terminal.
-        # Only block close during RINGING to prevent accidental dismiss
-        # of the accept/reject buttons.
-        self.set_can_close(active or sess.is_terminal)
+        # Block close during RINGING and ACTIVE to prevent accidental
+        # dismiss (proximity sensor blanking the screen can trigger it).
+        # The hangup button is the only way to leave an active call.
+        self.set_can_close(sess.is_terminal)
 
         # Manage the call-duration ticker. Start once on entry to
         # ACTIVE, stop on any other state.

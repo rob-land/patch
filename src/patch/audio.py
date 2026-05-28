@@ -189,6 +189,12 @@ def jingle_content_to_sdp(content: dict, *, role: str) -> str:
         if params:
             fmtp = ";".join(f"{k}={v}" for k, v in params.items())
             lines.append(f"a=fmtp:{p['id']} {fmtp}")
+    from patch.xmpp.jingle import jingle_candidate_to_sdp
+    for cand in transport.get("candidates") or []:
+        try:
+            lines.append(f"a={jingle_candidate_to_sdp(cand)}")
+        except (KeyError, TypeError):
+            pass
     return "\r\n".join(lines) + "\r\n"
 
 
@@ -419,17 +425,6 @@ class AudioEngine(GObject.Object):
         if not self._funnel.link(self._webrtc):
             log.warning("failed to link audio funnel into webrtcbin")
             return False
-        # Ensure webrtcbin has an audio transceiver even if caps
-        # haven't flowed through the pipeline yet. Without this,
-        # create_offer returns an empty SDP on fast back-to-back calls
-        # where pulsesrc hasn't pushed its first buffer.
-        audio_caps = Gst.Caps.from_string(
-            "application/x-rtp,media=audio,encoding-name=PCMU,"
-            "payload=0,clock-rate=8000")
-        self._webrtc.emit(
-            "add-transceiver",
-            GstWebRTC.WebRTCRTPTransceiverDirection.SENDRECV,
-            audio_caps)
         # Playback: pad-added → rtppcmudepay → mulawdec → pulsesink.
         self._webrtc.connect("pad-added", self._on_pad_added)
         self._webrtc.connect("on-ice-candidate", self._on_ice_candidate)
@@ -453,6 +448,7 @@ class AudioEngine(GObject.Object):
         bus.add_signal_watch()
         bus.connect("message", self._on_bus_message)
 
+        self._set_sink_port("output-earpiece")
         ret = self._pipeline.set_state(Gst.State.PLAYING)
         log.info("audio engine started (%s, gst state=%s)",
                  direction, ret.value_nick)
@@ -471,6 +467,7 @@ class AudioEngine(GObject.Object):
         self._pipeline.set_state(Gst.State.NULL)
         self._pipeline = None
         self._webrtc = None
+        self._set_sink_port("output-speaker")
         log.info("audio engine stopped")
 
     def _tick_stats(self) -> bool:
@@ -494,7 +491,8 @@ class AudioEngine(GObject.Object):
             Gst.Promise.new_with_change_func(self._on_answer_created,
                                               callback, None))
 
-    def set_remote_description(self, sdp_text: str, sdp_type: str = "answer") -> None:
+    def set_remote_description(self, sdp_text: str, sdp_type: str = "answer",
+                               on_complete=None) -> None:
         """sdp_type ∈ {"offer", "answer"} as per WebRTC."""
         sdp = self._parse_sdp(sdp_text)
         if sdp is None:
@@ -503,9 +501,12 @@ class AudioEngine(GObject.Object):
             GstWebRTC.WebRTCSDPType.OFFER if sdp_type == "offer"
             else GstWebRTC.WebRTCSDPType.ANSWER,
             sdp)
+        def _on_done(*_):
+            if on_complete is not None:
+                GLib.idle_add(on_complete)
         self._webrtc.emit(
             "set-remote-description", desc,
-            Gst.Promise.new_with_change_func(lambda *_: None, None, None))
+            Gst.Promise.new_with_change_func(_on_done, None, None))
 
     def add_remote_candidate(self, sdp_line: str, mline_index: int = 0) -> None:
         """SDP-formatted `candidate:…` line (no leading `a=`)."""
@@ -526,46 +527,29 @@ class AudioEngine(GObject.Object):
     }
 
     def set_speaker(self, enabled: bool) -> None:
-        """Route playback to the loudspeaker (True) or back to the
-        default output — typically the earpiece on a phone, speakers on
-        desktop. Probes PulseAudio/PipeWire for a sink with 'speaker'
-        in its description; if none is found (desktop without multiple
-        outputs), the toggle is a no-op."""
+        """Route playback to loudspeaker or earpiece.
+
+        On droid-HAL phones the PA sink has explicit output-earpiece /
+        output-speaker ports. Switch via ``pactl set-sink-port``.
+        On mainline devices the port names may differ, so fall back to
+        ``media.role`` toggling if the port switch fails.
+        """
         if self._pipeline is None:
             return
-        sink = self._pipeline.get_by_name("pb_sink")
-        if sink is None:
-            return
-        if enabled:
-            device = self._find_speaker_device()
-            if device:
-                sink.set_state(Gst.State.NULL)
-                sink.set_property("device", device)
-                sink.sync_state_with_parent()
-                log.info("speaker routed to %s", device)
-        else:
-            sink.set_state(Gst.State.NULL)
-            sink.set_property("device", "")
-            sink.sync_state_with_parent()
-            log.info("speaker routed to default (earpiece)")
+        port = "output-speaker" if enabled else "output-earpiece"
+        self._set_sink_port(port)
+        log.info("speaker: %s", "speaker" if enabled else "earpiece")
 
     @staticmethod
-    def _find_speaker_device() -> str:
-        """Probe PulseAudio/PipeWire for a loudspeaker sink."""
+    def _set_sink_port(port: str) -> None:
         import subprocess
         try:
-            out = subprocess.check_output(
-                ["pactl", "list", "sinks", "short"],
-                text=True, timeout=2)
-        except Exception:  # noqa: BLE001
-            return ""
-        for line in out.splitlines():
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                name = parts[1]
-                if "speaker" in name.lower() or "Speaker" in name:
-                    return name
-        return ""
+            subprocess.run(
+                ["pactl", "set-sink-port", "sink.primary_output", port],
+                check=True, timeout=2,
+                capture_output=True, text=True)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("set-sink-port %s failed: %s", port, exc)
 
     def set_mic_mute(self, muted: bool) -> None:
         """Mute/unmute the mic by toggling pulsesrc's mute property.
@@ -662,19 +646,22 @@ class AudioEngine(GObject.Object):
             return
         # Build playback chain as flat elements (same reason as the mic
         # chain — no sub-bin so segments propagate cleanly).
-        depay   = Gst.ElementFactory.make("rtppcmudepay", "pb_depay")
-        decoder = Gst.ElementFactory.make("mulawdec",     "pb_dec")
-        convert = Gst.ElementFactory.make("audioconvert", "pb_conv")
-        resample = Gst.ElementFactory.make("audioresample","pb_res")
-        sink    = Gst.ElementFactory.make("pulsesink",    "pb_sink")
+        # Use the pad index as a suffix so multiple src pads (SSRC
+        # changes from SIP gateways) each get their own chain.
+        idx = pad.get_name().replace("src_", "")
+        depay   = Gst.ElementFactory.make("rtppcmudepay", f"pb_depay_{idx}")
+        decoder = Gst.ElementFactory.make("mulawdec",     f"pb_dec_{idx}")
+        convert = Gst.ElementFactory.make("audioconvert", f"pb_conv_{idx}")
+        resample = Gst.ElementFactory.make("audioresample",f"pb_res_{idx}")
+        sink    = Gst.ElementFactory.make("pulsesink",    f"pb_sink_{idx}")
         for el in (depay, decoder, convert, resample, sink):
             if el is None:
                 log.warning("playback element missing — no inbound audio")
                 return
             self._pipeline.add(el)
-            el.sync_state_with_parent()
-        # Same role tagging as the mic side — see _call_stream_properties.
         sink.set_property("stream-properties", _call_stream_properties())
+        for el in (depay, decoder, convert, resample, sink):
+            el.sync_state_with_parent()
         for a, b in ((depay, decoder), (decoder, convert),
                      (convert, resample), (resample, sink)):
             if not a.link(b):

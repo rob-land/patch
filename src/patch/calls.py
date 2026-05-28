@@ -259,7 +259,10 @@ class CallManager(GObject.Object):
 
         if action == "proceed" and sess.state == STATE_PROPOSING:
             # Peer is ready for the Jingle session. We're the initiator
-            # of the audio session-initiate.
+            # of the audio session-initiate. Start ringback so the user
+            # hears the remote phone ringing — stopped when session-accept
+            # arrives or the call ends.
+            self._ringer.start_ringback()
             self._begin_jingle_outgoing(sess)
             self._transition(sess, STATE_ACTIVE)
         elif action == "accept" and sess.state == STATE_RINGING and not incoming:
@@ -354,6 +357,7 @@ class CallManager(GObject.Object):
             log.debug("jingle %s for unknown sid %s — ignored", action, sid)
             return
         if action == "session-accept":
+            self._ringer.stop()
             self._jingle.handle_session_accept(parsed)
         elif action == "transport-info":
             self._jingle.handle_transport_info(parsed)

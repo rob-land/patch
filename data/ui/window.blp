@@ -25,6 +25,11 @@ template $PatchWindow: Adw.ApplicationWindow {
     child: Adw.ToolbarView {
       [top]
       Adw.HeaderBar header_bar {
+        [start]
+        Gtk.Box {
+          width-request: 34;
+        }
+
         title-widget: Gtk.Stack title_stack {
           transition-type: crossfade;
 

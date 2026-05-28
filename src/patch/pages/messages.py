@@ -314,7 +314,14 @@ class PatchMessagesPage(Adw.Bin):
         # for this thread so a reply bubble can show the snippet of
         # the message it's replying to.
         by_xmpp_id = {r["xmpp_id"]: r for r in rows if r.get("xmpp_id")}
+        prev_date = None
         for msg in rows:
+            ts = msg.get("timestamp")
+            if ts:
+                msg_date = dt.datetime.fromtimestamp(ts).date()
+                if msg_date != prev_date:
+                    self.thread_list.append(_make_date_separator(msg_date))
+                    prev_date = msg_date
             self.thread_list.append(_render_thread_row(
                 msg, self._contacts,
                 send_reaction=self._send_reaction,
@@ -840,25 +847,25 @@ def _render_thread_row(msg: dict, contacts=None,
         )
         bubble_box.append(label)
 
-    # XEP-0308 corrected-marker. "(edited)" sits inline with the
-    # delivery indicator below the bubble body.
+    # Footer row: timestamp + edited marker + delivery indicator.
+    footer_parts = []
+    ts = msg.get("timestamp")
+    if ts:
+        footer_parts.append(_format_ts(ts))
     if msg.get("corrected_at"):
-        edited = Gtk.Label(label="(edited)", xalign=1, halign=Gtk.Align.END)
-        edited.add_css_class("caption")
-        edited.add_css_class("dim-label")
-        bubble_box.append(edited)
-
-    # Outgoing delivery indicator (XEP-0184 receipts). Classic SMS-app
-    # convention: ✓ = sent (server-acked), ✓✓ = delivered (peer ack).
-    # No indicator for inbound or for old rows that predate receipts.
+        footer_parts.append("edited")
     if not msg["incoming"]:
         ds = msg.get("delivery_state")
         glyph = {"sent": "✓", "delivered": "✓✓", "failed": "⚠"}.get(ds or "")
         if glyph:
-            status = Gtk.Label(label=glyph, xalign=1, halign=Gtk.Align.END)
-            status.add_css_class("caption")
-            status.add_css_class("dim-label")
-            bubble_box.append(status)
+            footer_parts.append(glyph)
+    if footer_parts:
+        footer = Gtk.Label(
+            label=" · ".join(footer_parts),
+            xalign=1, halign=Gtk.Align.END)
+        footer.add_css_class("caption")
+        footer.add_css_class("dim-label")
+        bubble_box.append(footer)
 
     # XEP-0444 reactions strip — aggregate { emoji: count } across all
     # senders and render as small pill-buttons below the bubble.
@@ -1010,3 +1017,24 @@ def _load_image_async(picture: Gtk.Picture, url: str) -> None:
 
 def _format_ts(timestamp: float) -> str:
     return dt.datetime.fromtimestamp(timestamp).strftime("%H:%M")
+
+
+def _make_date_separator(d: dt.date) -> Gtk.Widget:
+    today = dt.date.today()
+    delta = (today - d).days
+    if delta == 0:
+        label_text = "Today"
+    elif delta == 1:
+        label_text = "Yesterday"
+    elif delta < 7:
+        label_text = d.strftime("%A")
+    else:
+        label_text = d.strftime("%B %-d, %Y")
+    label = Gtk.Label(label=label_text, halign=Gtk.Align.CENTER)
+    label.add_css_class("caption")
+    label.add_css_class("dim-label")
+    row = Gtk.ListBoxRow(selectable=False, activatable=False)
+    row.set_margin_top(8)
+    row.set_margin_bottom(4)
+    row.set_child(label)
+    return row

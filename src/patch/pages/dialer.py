@@ -202,16 +202,18 @@ class PatchDialerPage(Adw.Bin):
             self.recent_stack.set_visible_child_name("empty")
             return
         for c in calls:
-            self.recent_list.append(_make_call_row(c))
+            self.recent_list.append(_make_call_row(c, self))
         self.recent_stack.set_visible_child_name("list")
 
     def _on_recent_activated(self, _list, row):
         peer_jid = row.get_name()
         if not peer_jid:
             return
-        # Tap to redial. Same path the dialer Call button uses.
-        self.activate_action(
-            "win.start-call", GLib.Variant("s", peer_jid))
+        from patch.numfmt import jid_to_number
+        number = jid_to_number(peer_jid, self._account.gateway)
+        if number:
+            self._raw_number = number
+            self._render_entry()
 
     # -- view-stack accessor used by the window's tab wiring -----------
 
@@ -224,7 +226,7 @@ class PatchDialerPage(Adw.Bin):
         }
 
 
-def _make_call_row(call: dict) -> Adw.ActionRow:
+def _make_call_row(call: dict, page: PatchDialerPage) -> Adw.ActionRow:
     when = dt.datetime.fromtimestamp(call["started_at"])
     today = dt.date.today()
     if when.date() == today:
@@ -239,8 +241,50 @@ def _make_call_row(call: dict) -> Adw.ActionRow:
     row = Adw.ActionRow(
         title=call.get("peer_label") or call["peer_jid"],
         subtitle=subtitle,
+        activatable=True,
     )
     row.set_name(call["peer_jid"])
     row.add_prefix(Gtk.Image.new_from_icon_name(direction_icon))
     row.add_suffix(Gtk.Image.new_from_icon_name(state_icon))
+    _attach_recent_menu(row, call, page)
     return row
+
+
+def _attach_recent_menu(row: Adw.ActionRow, call: dict,
+                        page: PatchDialerPage) -> None:
+    peer_jid = call["peer_jid"]
+    menu = Gio.Menu()
+    menu.append("Call", f"recent.call::{peer_jid}")
+    menu.append("Send message", f"recent.message::{peer_jid}")
+    menu.append("Copy number", f"recent.copy::{peer_jid}")
+    popover = Gtk.PopoverMenu(menu_model=menu)
+    popover.set_parent(row)
+    popover.set_has_arrow(False)
+
+    actions = Gio.SimpleActionGroup()
+    call_action = Gio.SimpleAction.new("call", GLib.VariantType.new("s"))
+    call_action.connect("activate", lambda _a, p: page.activate_action(
+        "win.start-call", p))
+    actions.add_action(call_action)
+
+    msg_action = Gio.SimpleAction.new("message", GLib.VariantType.new("s"))
+    msg_action.connect("activate", lambda _a, p: page.activate_action(
+        "win.open-conversation", p))
+    actions.add_action(msg_action)
+
+    copy_action = Gio.SimpleAction.new("copy", GLib.VariantType.new("s"))
+    def _on_copy(_a, param):
+        from patch.numfmt import jid_to_number
+        number = jid_to_number(param.get_string(), page._account.gateway)
+        if number:
+            display = page.get_display()
+            if display:
+                display.get_clipboard().set(number)
+    copy_action.connect("activate", _on_copy)
+    actions.add_action(copy_action)
+
+    row.insert_action_group("recent", actions)
+
+    gesture = Gtk.GestureLongPress()
+    gesture.connect("pressed", lambda _g, _x, _y: popover.popup())
+    row.add_controller(gesture)

@@ -126,13 +126,9 @@ class JingleSession(GObject.Object):
         content = contents[0]
         sdp = jingle_content_to_sdp(content, role="offer")
         log.info("remote offer translated SDP (%d bytes):\n%s", len(sdp), sdp)
-        self.engine.set_remote_description(sdp, sdp_type="offer")
-        self._remote_desc_set = True
-        # Flush any candidates that arrived before the description.
-        for line in self._pending_remote_candidates:
-            self.engine.add_remote_candidate(line)
-        self._pending_remote_candidates.clear()
-        self.engine.create_answer(self._send_session_accept)
+        self.engine.set_remote_description(
+            sdp, sdp_type="offer",
+            on_complete=lambda: self._on_remote_offer_set())
 
     def _send_session_accept(self, sdp_text: str) -> None:
         log.info("local answer SDP ready (%d bytes):\n%s",
@@ -173,11 +169,25 @@ class JingleSession(GObject.Object):
         sdp = jingle_content_to_sdp(contents[0], role="answer")
         log.info("session-accept: %d byte SDP applied", len(sdp))
         log.debug("remote answer SDP:\n%s", sdp)
-        self.engine.set_remote_description(sdp, sdp_type="answer")
+        self.engine.set_remote_description(
+            sdp, sdp_type="answer",
+            on_complete=self._flush_pending_remote)
+
+    def _flush_pending_remote(self) -> None:
         self._remote_desc_set = True
+        added = 0
         for line in self._pending_remote_candidates:
-            self.engine.add_remote_candidate(line)
+            if self.engine is not None:
+                self.engine.add_remote_candidate(line)
+                added += 1
         self._pending_remote_candidates.clear()
+        if added:
+            log.info("flushed %d pending remote candidates", added)
+
+    def _on_remote_offer_set(self) -> None:
+        self._flush_pending_remote()
+        if self.engine is not None:
+            self.engine.create_answer(self._send_session_accept)
 
     def handle_transport_info(self, parsed: dict) -> None:
         contents = parsed.get("contents") or []
