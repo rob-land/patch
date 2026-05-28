@@ -21,6 +21,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     if: startsWith(github.server_url, 'https://git.rob.land')
+    # aarch64 under qemu emulation can take well over an hour for a
+    # full GNOME-runtime-based build (EDS + libfolks + the Python
+    # wheels). Default runner timeout is too short.
+    timeout-minutes: 360
     container:
       image: flatpak-builder-base:gnome50
       volumes:
