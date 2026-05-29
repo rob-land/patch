@@ -26,25 +26,22 @@
     font-size: 24px;
 }
 
-/* Outer bubble container — both inbound and outbound. */
+/* Outer bubble container — both inbound and outbound.
+   Shared with Banter's .msg-bubble (same shape, padding, radius). */
 .patch-bubble {
-    padding: 10px 12px;
-    border-radius: 16px;
+    padding: 8px 14px;
+    border-radius: 18px;
     min-width: 60px;
-    /* Bubble width is bounded by the child Gtk.Label's max_width_chars
-       (set in pages/messages._render_thread_row); Gtk CSS doesn't have
-       a max-width property. */
 }
 
 .patch-bubble-incoming {
-    background: alpha(@accent_bg_color, 0.18);
-    color:      @window_fg_color;
+    background-color: @card_bg_color;
     border-bottom-left-radius: 4px;     /* "speech tail" toward the sender */
 }
 
 .patch-bubble-outgoing {
-    background: @accent_bg_color;
-    color:      @accent_fg_color;
+    background-color: @accent_bg_color;
+    color:            @accent_fg_color;
     border-bottom-right-radius: 4px;
 }
 
@@ -60,4 +57,35 @@
    more confidently than read ones. */
 .patch-conv-unread .title {
     font-weight: 700;
+}
+
+/* Inline caption helpers — shared with Banter for the sender label
+   above each bubble and other secondary text in the thread. */
+.dim-caption  { font-size: 0.82em; }
+.bold-name    { font-weight: 600; }
+
+/* Reaction pills — shared with Banter's .reaction-pill style. */
+.reaction-pill {
+    border-radius: 999px;
+    padding: 0 8px;
+    min-height: 32px;
+    font-size: 0.85em;
+}
+.reaction-pill-mine {
+    background-color: alpha(@accent_bg_color, 0.18);
+    color:            @accent_fg_color;
+}
+
+/* Date separators between days in a conversation. */
+.date-separator {
+    margin-top: 10px;
+    margin-bottom: 6px;
+}
+.date-separator-label {
+    background-color: alpha(@card_fg_color, 0.08);
+    border-radius: 999px;
+    padding: 2px 14px;
+    font-size: 0.78em;
+    font-weight: 600;
+    color: @dim_label_color;
 }

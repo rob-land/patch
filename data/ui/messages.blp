@@ -25,7 +25,7 @@ template $PatchMessagesPage: Adw.Bin {
           // own header bar as the only chrome up top.
           [overlay]
           Gtk.Button new_message_button {
-            icon-name: "document-edit-symbolic";
+            icon-name: "list-add-symbolic";
             tooltip-text: _("New conversation");
             halign: end;
             valign: end;
@@ -127,7 +127,7 @@ template $PatchMessagesPage: Adw.Bin {
               placeholder-text: _("Message");
             }
             Gtk.Button send_button {
-              icon-name: "go-up-symbolic";
+              icon-name: "mail-send-symbolic";
               tooltip-text: _("Send");
               action-name: "patch.send-message";
               styles ["pill", "suggested-action"]

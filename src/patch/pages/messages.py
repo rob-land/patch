@@ -785,8 +785,8 @@ def _render_thread_row(msg: dict, contacts=None,
         )
         sender_label.set_margin_start(16)
         sender_label.set_margin_top(2)
-        sender_label.add_css_class("caption")
-        sender_label.add_css_class("dim-label")
+        sender_label.add_css_class("dim-caption")
+        sender_label.add_css_class("bold-name")
 
     bubble_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
     bubble_box.set_halign(align)
@@ -922,10 +922,9 @@ def _build_reactions_strip(msg: dict) -> Gtk.Widget | None:
     strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
     strip.set_halign(Gtk.Align.START if msg["incoming"] else Gtk.Align.END)
     for emoji, n in counts.items():
-        label = emoji if n == 1 else f"{emoji} {n}"
-        pill = Gtk.Label(label=label)
-        pill.add_css_class("caption")
-        pill.add_css_class("dim-label")
+        text = emoji if n == 1 else f"{emoji} {n}"
+        pill = Gtk.Label(label=text)
+        pill.add_css_class("reaction-pill")
         strip.append(pill)
     return strip
 
@@ -1016,25 +1015,28 @@ def _load_image_async(picture: Gtk.Picture, url: str) -> None:
 
 
 def _format_ts(timestamp: float) -> str:
-    return dt.datetime.fromtimestamp(timestamp).strftime("%H:%M")
+    return dt.datetime.fromtimestamp(timestamp).strftime("%-I:%M %p")
 
 
 def _make_date_separator(d: dt.date) -> Gtk.Widget:
     today = dt.date.today()
-    delta = (today - d).days
-    if delta == 0:
+    if d == today:
         label_text = "Today"
-    elif delta == 1:
+    elif d == today - dt.timedelta(days=1):
         label_text = "Yesterday"
-    elif delta < 7:
-        label_text = d.strftime("%A")
+    elif d.year == today.year:
+        label_text = d.strftime("%A, %B %-d")
     else:
         label_text = d.strftime("%B %-d, %Y")
-    label = Gtk.Label(label=label_text, halign=Gtk.Align.CENTER)
-    label.add_css_class("caption")
-    label.add_css_class("dim-label")
+    # Pill-style separator: centered box wrapping a label with the
+    # rounded-background style applied to it. Matches Banter's
+    # widgets/misc/date.DateSeparator for cross-app consistency.
+    inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+    inner.set_halign(Gtk.Align.CENTER)
+    inner.add_css_class("date-separator")
+    label = Gtk.Label(label=label_text)
+    label.add_css_class("date-separator-label")
+    inner.append(label)
     row = Gtk.ListBoxRow(selectable=False, activatable=False)
-    row.set_margin_top(8)
-    row.set_margin_bottom(4)
-    row.set_child(label)
+    row.set_child(inner)
     return row
