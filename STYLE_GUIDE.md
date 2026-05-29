@@ -237,6 +237,210 @@ Yes → split. No → single-pane. The other questions (desktop vs.
 mobile, breakpoints, narrow handling) are downstream of that
 answer — `NavigationSplitView` handles them once.
 
+## Suite UI conventions
+
+The cohort apps should look like one product. These conventions are
+the ones that drift easily and pull the suite apart visually — copy
+them verbatim into new projects.
+
+### Toasts
+
+Every window registers exactly one window-scoped action for toasts:
+
+```python
+# window.py constructor
+toast_action = Gio.SimpleAction.new("toast", GLib.VariantType.new("s"))
+toast_action.connect("activate",
+    lambda _a, p: self.toast_overlay.add_toast(Adw.Toast.new(p.get_string())))
+self.add_action(toast_action)
+```
+
+Child widgets, pages, dialogs, and even cross-cutting application
+code fire toasts via the action — they never reach into
+`toast_overlay` themselves and don't need a window reference:
+
+```python
+widget.activate_action("win.toast", GLib.Variant("s", "Saved."))
+```
+
+A window may keep a convenience `self.toast(msg)` method for its own
+internal call sites; cross-file callers always use the action.
+
+### Adw.Dialog content-width
+
+Use **exactly two values**:
+
+- **360sp** — narrow dialogs: pickers, single-field entry,
+  confirmation prompts, status screens. Sized so the dialog feels
+  comfortable on a 360px-wide phone surface.
+- **480sp** — form dialogs: any dialog with multiple input rows,
+  preferences groups, an editor, or a list of choices.
+
+Picking anything else (340, 380, 420, 460) drifts the suite and gets
+flagged. `Adw.Dialog` is adaptive, so the width is a *preferred*
+maximum — narrower screens still collapse correctly.
+
+### Header bar
+
+```
+Adw.HeaderBar header_bar {
+  [start]  Gtk.Box { width-request: 34; }    // optional spacer to
+                                              // balance the menu button
+                                              // when title centering
+                                              // matters on narrow
+                                              // widths
+  title-widget: Gtk.Stack title_stack {
+    Gtk.StackPage { name: "wide"; child: Adw.ViewSwitcher { ... }; }
+    Gtk.StackPage { name: "narrow"; child: Adw.WindowTitle { ... }; }
+  };
+  [end]    MenuButton {
+    icon-name: "open-menu-symbolic";
+    primary: true;
+    menu-model: primary_menu;
+    tooltip-text: _("Main Menu");
+  }
+}
+```
+
+The narrow breakpoint flips `title_stack.visible-child-name` to
+`"narrow"` and reveals the bottom `Adw.ViewSwitcherBar` so view
+switching stays in thumb reach on phone widths. Apps that don't have
+multiple top-level views skip the `Gtk.Stack` and put an
+`Adw.WindowTitle` directly in `title-widget`.
+
+### Primary menu
+
+Every app's `primary_menu` contains, in order:
+
+1. App-specific actions (Preferences, Sign Out, sub-commands…)
+2. A separator
+3. `Keyboard Shortcuts` → `win.show-help-overlay`
+4. `About <Name>` → `app.about`
+
+`Quit` is a keyboard shortcut (`<Ctrl>q`) wired to `app.quit`, not a
+menu item — Adwaita's pattern is that close-window/quit is the
+window's responsibility, not a menu surface. Apps with a "Sign Out"
+or "Reload" type action place it at the top of the app-specific
+section, before Preferences.
+
+### Adw.BreakpointBin
+
+Adaptive layout lives in the template, not in Python:
+
+```
+content: Adw.BreakpointBin {
+  width-request: 360;
+  height-request: 360;
+
+  Adw.Breakpoint {
+    condition ("max-width: 600sp")
+    setters {
+      title_stack.visible-child-name: "narrow";
+      view_switcher_bar.reveal: true;
+      // ... other narrow-mode setters
+    }
+  }
+
+  child: Adw.ToolbarView { ... };
+}
+```
+
+Templates that wrap the entire window contents in `Adw.BreakpointBin`
+are the cohort standard. `Adw.ApplicationWindow.add_breakpoint()` in
+Python works and is functionally equivalent — use it only when the
+window has no template (rare).
+
+### Shared CSS classes
+
+The cohort shares a small set of CSS classes for cross-app
+consistency. Define them in each project's `data/ui/style.css`:
+
+```css
+/* Message / chat bubbles (Banter, Patch) */
+.msg-bubble, .patch-bubble {
+    border-radius: 18px;
+    padding: 8px 14px;
+}
+.msg-bubble.mine, .patch-bubble-outgoing {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-bottom-right-radius: 4px;
+}
+.msg-bubble.theirs, .patch-bubble-incoming {
+    background-color: @card_bg_color;
+    border-bottom-left-radius: 4px;
+}
+
+/* Caption helpers used above bubbles, in reaction pills, etc. */
+.dim-caption  { font-size: 0.82em; }
+.bold-name    { font-weight: 600; }
+
+/* Reaction pills */
+.reaction-pill      { border-radius: 999px; padding: 0 8px;
+                      min-height: 32px; font-size: 0.85em; }
+.reaction-pill-mine { background-color: alpha(@accent_bg_color, 0.18);
+                      color: @accent_fg_color; }
+
+/* Date separators between days in a chat / log view */
+.date-separator       { margin-top: 10px; margin-bottom: 6px; }
+.date-separator-label { background-color: alpha(@card_fg_color, 0.08);
+                        border-radius: 999px; padding: 2px 14px;
+                        font-size: 0.78em; font-weight: 600;
+                        color: @dim_label_color; }
+```
+
+Apps that don't use a given concept (e.g. no reactions) drop the
+class. Don't rename them per-app — Banter uses `.msg-bubble` and
+Patch uses `.patch-bubble` for historical reasons; both should
+ultimately converge on `.msg-bubble`. New apps use the shorter form.
+
+### Icon names
+
+Standard icon picks for common actions:
+
+| Action | Icon |
+|---|---|
+| Send (chat / mail) | `mail-send-symbolic` |
+| Attach | `mail-attachment-symbolic` |
+| New conversation / item | `list-add-symbolic` |
+| Edit | `document-edit-symbolic` |
+| Delete | `user-trash-symbolic` |
+| Search | `system-search-symbolic` |
+| Open menu | `open-menu-symbolic` |
+| Back | `go-previous-symbolic` |
+| Paste (paste-button suffix) | `edit-paste-symbolic` |
+| Copy | `edit-copy-symbolic` |
+| Settings | `preferences-system-symbolic` |
+
+`go-up-symbolic` is for navigation, not for "send"; reserve it.
+`edit-find-symbolic` and `system-search-symbolic` are
+interchangeable visually; the cohort uses `system-search` for the
+search button and `edit-find` for an in-page find / replace icon.
+
+### Gtk.Template.Child annotations
+
+Use typed annotations, not string-keyed:
+
+```python
+toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()    # right
+toast_overlay = Gtk.Template.Child("toast_overlay")       # wrong
+```
+
+The typed form gives IDE completion and makes `__init__` order
+obvious. The id is inferred from the attribute name; the explicit
+string form was meant for legacy names and shouldn't be used in
+new code.
+
+### Paste on narrow / touch surfaces
+
+Long-press paste on `Adw.EntryRow` / `Gtk.Entry` is unreliable on
+Phosh because the surrounding `Adw.PreferencesDialog` /
+`Gtk.ScrolledWindow` consumes the long-press gesture. Add an
+explicit `edit-paste-symbolic` suffix on entry rows users will paste
+into (passwords, JIDs, phone numbers). For `Gtk.Entry`, use the
+built-in `secondary-icon-name` and wire `notify::icon-press`. The
+paste handler reads from `display.get_clipboard().read_text_async()`.
+
 ## Flatpak
 
 - Manifest at `build-aux/flatpak/land.rob.<project>.json` (JSON, not
