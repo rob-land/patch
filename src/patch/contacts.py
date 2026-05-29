@@ -298,6 +298,153 @@ class ContactsManager(GObject.Object):
             names.append(self.label_for_jid(piece_jid))
         return ", ".join(names)
 
+    # -- write path ------------------------------------------------------
+
+    def _writable_book(self):
+        """Connect to the address book we should write into, or None.
+
+        Policy (mirrors the user's stated preference):
+          1. the system default address book, if GNOME Contacts has one
+             selected and it accepts writes,
+          2. otherwise the local "Personal" book (system-address-book),
+          3. otherwise the first writable EDS source.
+        Returns a connected, non-readonly ``EBook.BookClient`` or None
+        when EDS is absent / nothing is writable (callers then fall back
+        to the JSON file).
+        """
+        if EDataServer is None or EBook is None:
+            return None
+        try:
+            reg = EDataServer.SourceRegistry.new_sync(None)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("EDS source registry unavailable: %s", exc)
+            return None
+        ext = EDataServer.SOURCE_EXTENSION_ADDRESS_BOOK
+        ordered = []
+        dflt = reg.ref_default_address_book()
+        if dflt is not None and dflt.has_extension(ext):
+            ordered.append(dflt)
+        local = reg.ref_source("system-address-book")
+        if local is not None and local.has_extension(ext):
+            ordered.append(local)
+        ordered.extend(reg.list_sources(None))
+        seen: set[str] = set()
+        for src in ordered:
+            uid = src.get_uid()
+            if uid in seen or not src.has_extension(ext) or not src.get_enabled():
+                continue
+            seen.add(uid)
+            try:
+                book = EBook.BookClient.connect_sync(src, 5, None)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("EDS book %s unwritable: %s", src.get_display_name(), exc)
+                continue
+            if not book.is_readonly():
+                return book
+        return None
+
+    def contact_targets(self) -> list[tuple[str, str]]:
+        """Existing contacts the user could add a number to.
+
+        Returns ``[(id, display_name)]`` sorted by name. With a writable
+        EDS book the id is the contact UID; in JSON-fallback mode it's
+        the name itself (the JSON shape is just number -> name).
+        """
+        book = self._writable_book()
+        if book is not None:
+            try:
+                ok, contacts = book.get_contacts_sync(
+                    EBookContacts.book_query_any_field_contains("").to_string(),
+                    None)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("EDS contact list failed: %s", exc)
+                contacts = None
+            out = []
+            for c in contacts or []:
+                name = (c.get_property("full-name") or "").strip()
+                uid = c.get_property("id")
+                if name and uid:
+                    out.append((uid, name))
+            out.sort(key=lambda t: t[1].casefold())
+            return out
+        names = sorted(set(self._by_number.values()), key=str.casefold)
+        return [(n, n) for n in names]
+
+    def create_contact(self, name: str, number_e164: str) -> bool:
+        """Create a new contact with ``number_e164``. Returns success."""
+        name = (name or "").strip()
+        if not name or not number_e164:
+            return False
+        book = self._writable_book()
+        if book is not None:
+            contact = EBookContacts.Contact.new()
+            contact.set_property("full-name", name)
+            contact.add_attribute(self._tel_attribute(number_e164))
+            try:
+                book.add_contact_sync(
+                    contact, EBookContacts.BookOperationFlags(0), None)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("EDS add_contact failed: %s", exc)
+                return False
+        elif not self._write_json(number_e164, name):
+            return False
+        self._rebuild()
+        return True
+
+    def add_number_to_contact(self, contact_id: str, number_e164: str) -> bool:
+        """Add ``number_e164`` to the existing contact ``contact_id``.
+
+        ``contact_id`` is whatever ``contact_targets()`` returned — an
+        EDS UID with a writable book, or the contact name in JSON mode.
+        """
+        if not contact_id or not number_e164:
+            return False
+        book = self._writable_book()
+        if book is not None:
+            try:
+                ok, contact = book.get_contact_sync(contact_id, None)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("EDS get_contact failed: %s", exc)
+                return False
+            if not ok or contact is None:
+                return False
+            contact.add_attribute(self._tel_attribute(number_e164))
+            try:
+                book.modify_contact_sync(
+                    contact, EBookContacts.BookOperationFlags(0), None)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("EDS modify_contact failed: %s", exc)
+                return False
+        elif not self._write_json(number_e164, contact_id):
+            return False
+        self._rebuild()
+        return True
+
+    @staticmethod
+    def _tel_attribute(number_e164: str):
+        attr = EBookContacts.VCardAttribute.new("", "TEL")
+        attr.add_value(number_e164)
+        return attr
+
+    def _write_json(self, number_e164: str, name: str) -> bool:
+        """Persist a number -> name pair into contacts.json."""
+        path = self._json_path()
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data: dict = {}
+            if os.path.exists(path):
+                with open(path, encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+                if isinstance(loaded, dict):
+                    data = loaded
+            data[number_e164] = name
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, indent=2, ensure_ascii=False)
+        except (OSError, json.JSONDecodeError) as exc:
+            log.warning("contacts.json write failed: %s", exc)
+            return False
+        return True
+
     # -- callbacks -------------------------------------------------------
 
     def _on_prepared(self, _aggregator, result):

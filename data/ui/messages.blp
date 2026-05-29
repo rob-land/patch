@@ -142,6 +142,13 @@ template $PatchMessagesPage: Adw.Bin {
 menu thread_menu {
   section {
     item {
+      label: _("Add to contacts");
+      action: "patch.add-contact";
+    }
+  }
+
+  section {
+    item {
       label: _("Block this number");
       action: "patch.block-thread";
     }

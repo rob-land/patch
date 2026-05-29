@@ -10,6 +10,7 @@ blueprint_sources = files(
   'call-dialog.blp',
   'preferences-dialog.blp',
   'new-message-dialog.blp',
+  'add-contact-dialog.blp',
 )
 
 blueprints = custom_target('blueprints',

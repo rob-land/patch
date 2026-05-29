@@ -1,0 +1,45 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $PatchAddContactDialog: Adw.Dialog {
+  title: _("Add to contacts");
+  content-width: 360;
+
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      title-widget: Adw.WindowTitle {
+        title: _("Add to contacts");
+      };
+    }
+
+    content: Adw.PreferencesPage {
+      Adw.PreferencesGroup {
+        Adw.ActionRow number_row {
+          title: _("Number");
+        }
+      }
+
+      Adw.PreferencesGroup {
+        Adw.ComboRow target_row {
+          title: _("Contact");
+          subtitle: _("Create a new contact or add to an existing one.");
+          enable-search: true;
+        }
+
+        Adw.EntryRow name_row {
+          title: _("Name");
+        }
+      }
+
+      Adw.PreferencesGroup {
+        Gtk.Button save_button {
+          label: _("Save");
+          halign: center;
+          margin-top: 8;
+          styles ["pill", "suggested-action"]
+        }
+      }
+    };
+  };
+}

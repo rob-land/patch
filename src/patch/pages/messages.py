@@ -87,6 +87,9 @@ class PatchMessagesPage(Adw.Bin):
         block_action = Gio.SimpleAction.new("block-thread", None)
         block_action.connect("activate", self._on_block_thread)
         actions.add_action(block_action)
+        self._add_contact_action = Gio.SimpleAction.new("add-contact", None)
+        self._add_contact_action.connect("activate", self._on_add_contact)
+        actions.add_action(self._add_contact_action)
         self.insert_action_group("patch", actions)
 
         # Listen for inbound messages on the XMPP client. Outbound echos
@@ -115,8 +118,7 @@ class PatchMessagesPage(Adw.Bin):
         # When the contacts index rebuilds, redraw the conversation list
         # so number-only rows pick up the freshly-resolved name.
         if self._contacts is not None:
-            self._contacts.connect("index-changed",
-                                   lambda *_: self._refresh_conversation_list())
+            self._contacts.connect("index-changed", self._on_contacts_changed)
         # XEP-0084 PEP avatars: redraw the conversation list when a new
         # avatar lands on disk so the affected row picks up the icon.
         if self._avatars is not None:
@@ -291,6 +293,10 @@ class PatchMessagesPage(Adw.Bin):
         name = self._display_name_for(remote_jid, self._account.gateway)
         self.thread_title.set_title(name)
         self.thread_title.set_subtitle("")
+        # "Add to contacts" only makes sense for a 1-on-1 number we
+        # can't already name.
+        self._add_contact_action.set_enabled(
+            self._is_unknown_number(remote_jid))
         # Update the thread header avatar.
         self.thread_avatar.set_text(name or remote_jid)
         self.thread_avatar.set_custom_image(None)
@@ -575,6 +581,34 @@ class PatchMessagesPage(Adw.Bin):
             message, GLib.PRIORITY_DEFAULT, None, on_put)
 
     # -- inbound -----------------------------------------------------------
+
+    def _on_contacts_changed(self, *_):
+        # A name may have appeared (e.g. the user just added this number
+        # to contacts) — refresh the list and the open thread header.
+        self._refresh_conversation_list()
+        if self._open_jid is not None:
+            self._open_thread(self._open_jid, navigate=False)
+
+    def _is_unknown_number(self, jid: str) -> bool:
+        """True for a 1-on-1 number we have no contact name for."""
+        if self._contacts is None or numfmt.is_group_jid(jid):
+            return False
+        number = numfmt.jid_to_number(jid, self._account.gateway)
+        return bool(number) and self._contacts.lookup(number) is None
+
+    def _on_add_contact(self, *_):
+        jid = self._open_jid
+        if not jid or not self._is_unknown_number(jid):
+            return
+        number = numfmt.jid_to_number(jid, self._account.gateway)
+        if not number:
+            return
+        from patch.dialogs.add_contact_dialog import PatchAddContactDialog
+        window = self.get_root() if isinstance(self.get_root(), Gtk.Window) else None
+        if window is None:
+            return
+        dialog = PatchAddContactDialog(self._contacts, number, window)
+        dialog.present(window)
 
     def _on_block_thread(self, *_):
         jid = self._open_jid
