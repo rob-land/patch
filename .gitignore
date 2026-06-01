@@ -26,3 +26,5 @@ __pycache__/
 
 # Backup from flatpak-pip-generator runs
 build-aux/flatpak/python3-deps.json.bak
+
+.env
