@@ -293,10 +293,10 @@ class PatchMessagesPage(Adw.Bin):
         name = self._display_name_for(remote_jid, self._account.gateway)
         self.thread_title.set_title(name)
         self.thread_title.set_subtitle("")
-        # "Add to contacts" only makes sense for a 1-on-1 number we
-        # can't already name.
+        # "Add to contacts" only makes sense when the thread has a
+        # number we can't already name (1-on-1 or a group participant).
         self._add_contact_action.set_enabled(
-            self._is_unknown_number(remote_jid))
+            self._has_unknown_contact(remote_jid))
         # Update the thread header avatar.
         self.thread_avatar.set_text(name or remote_jid)
         self.thread_avatar.set_custom_image(None)
@@ -333,7 +333,9 @@ class PatchMessagesPage(Adw.Bin):
                 send_reaction=self._send_reaction,
                 start_reply=self._start_reply,
                 start_edit=self._start_edit,
-                by_xmpp_id=by_xmpp_id))
+                by_xmpp_id=by_xmpp_id,
+                own_jid=self._own_bare(),
+                open_picker=self._open_reaction_picker))
         self._store.mark_read(remote_jid)
         # Incremental refresh so the unread badge clears without
         # tearing down the entire list.
@@ -589,25 +591,48 @@ class PatchMessagesPage(Adw.Bin):
         if self._open_jid is not None:
             self._open_thread(self._open_jid, navigate=False)
 
-    def _is_unknown_number(self, jid: str) -> bool:
-        """True for a 1-on-1 number we have no contact name for."""
-        if self._contacts is None or numfmt.is_group_jid(jid):
+    def _has_unknown_contact(self, jid: str) -> bool:
+        """True when the thread has at least one number with no contact
+        name — a 1-on-1 unknown number, or any unknown group participant."""
+        if self._contacts is None:
             return False
+        if numfmt.is_group_jid(jid):
+            return any(self._contacts.lookup(n) is None
+                       for n in self._group_numbers(jid))
         number = numfmt.jid_to_number(jid, self._account.gateway)
         return bool(number) and self._contacts.lookup(number) is None
 
+    def _group_numbers(self, jid: str) -> list[str]:
+        """E.164 numbers for each participant of a group JID."""
+        domain = jid.partition("@")[2]
+        numbers = []
+        for part in jid.partition("@")[0].split(","):
+            number = numfmt.jid_to_number(f"{part}@{domain}",
+                                          self._account.gateway)
+            if number:
+                numbers.append(number)
+        return numbers
+
     def _on_add_contact(self, *_):
         jid = self._open_jid
-        if not jid or not self._is_unknown_number(jid):
+        if not jid or not self._has_unknown_contact(jid):
             return
-        number = numfmt.jid_to_number(jid, self._account.gateway)
-        if not number:
-            return
-        from patch.dialogs.add_contact_dialog import PatchAddContactDialog
         window = self.get_root() if isinstance(self.get_root(), Gtk.Window) else None
         if window is None:
             return
-        dialog = PatchAddContactDialog(self._contacts, number, window)
+        if numfmt.is_group_jid(jid):
+            # Multiple numbers — let the user pick which to add. Each
+            # unknown one hands off to the same single-number flow.
+            from patch.dialogs.group_contacts_dialog import \
+                PatchGroupContactsDialog
+            dialog = PatchGroupContactsDialog(
+                self._contacts, self._account.gateway, jid, window)
+        else:
+            number = numfmt.jid_to_number(jid, self._account.gateway)
+            if not number:
+                return
+            from patch.dialogs.add_contact_dialog import PatchAddContactDialog
+            dialog = PatchAddContactDialog(self._contacts, number, window)
         dialog.present(window)
 
     def _on_block_thread(self, *_):
@@ -677,6 +702,25 @@ class PatchMessagesPage(Adw.Bin):
             self.activate_action(
                 "win.toast", GLib.Variant("s", "Reaction failed"))
 
+    def _own_bare(self) -> str:
+        """Our own bare JID — the key our reactions are stored under."""
+        return (self._account.jid or "").split("/")[0]
+
+    def _open_reaction_picker(self, target_id: str) -> None:
+        """Open the full emoji picker / reactor summary for a message."""
+        window = self.get_root() if isinstance(self.get_root(), Gtk.Window) else None
+        if window is None:
+            return
+        from patch.dialogs.reaction_picker import PatchReactionPicker
+        picker = PatchReactionPicker(
+            target_id=target_id,
+            by_sender=self._store.reactions_for(target_id),
+            own_jid=self._own_bare(),
+            contacts=self._contacts,
+            on_apply=self._send_reaction,
+            parent_window=window)
+        picker.present(window)
+
     def _on_message_receipt(self, _xmpp, _message_id, _state):
         # We don't try to surgically swap one bubble's glyph — just
         # re-render the visible thread (cheap; messages are small).
@@ -720,7 +764,9 @@ class PatchMessagesPage(Adw.Bin):
                     msg, self._contacts,
                     send_reaction=self._send_reaction,
                     start_reply=self._start_reply,
-                    start_edit=self._start_edit))
+                    start_edit=self._start_edit,
+                    own_jid=self._own_bare(),
+                    open_picker=self._open_reaction_picker))
             self._store.mark_read(remote_jid)
         self._update_conversation_for(remote_jid)
 
@@ -798,7 +844,9 @@ _QUICK_REACTIONS = ["👍", "❤️", "😂", "😮", "😢", "🙏"]
 def _render_thread_row(msg: dict, contacts=None,
                        send_reaction=None, start_reply=None,
                        start_edit=None,
-                       by_xmpp_id: dict | None = None) -> Gtk.Widget:
+                       by_xmpp_id: dict | None = None,
+                       own_jid: str | None = None,
+                       open_picker=None) -> Gtk.Widget:
     align = Gtk.Align.START if msg["incoming"] else Gtk.Align.END
 
     # For group-SMS messages we know the per-message sender JID; render
@@ -823,11 +871,6 @@ def _render_thread_row(msg: dict, contacts=None,
         sender_label.add_css_class("bold-name")
 
     bubble_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-    bubble_box.set_halign(align)
-    bubble_box.set_margin_start(12)
-    bubble_box.set_margin_end(12)
-    bubble_box.set_margin_top(4)
-    bubble_box.set_margin_bottom(4)
     bubble_box.add_css_class("patch-bubble")
     bubble_box.add_css_class(
         "patch-bubble-incoming" if msg["incoming"] else "patch-bubble-outgoing")
@@ -901,17 +944,12 @@ def _render_thread_row(msg: dict, contacts=None,
         footer.add_css_class("dim-label")
         bubble_box.append(footer)
 
-    # XEP-0444 reactions strip — aggregate { emoji: count } across all
-    # senders and render as small pill-buttons below the bubble.
-    reactions_strip = _build_reactions_strip(msg)
-    if reactions_strip is not None:
-        bubble_box.append(reactions_strip)
-
     # Right-click / long-press → reaction + reply + edit popover. Only
     # attach when we have a stanza id to target. Edit is restricted to
     # own (outgoing) bubbles — XEP-0308 only lets the original sender
     # correct.
     target_id = msg.get("xmpp_id") or ""
+    own_reactions = _own_reactions_for(msg, own_jid)
     if target_id and (send_reaction is not None
                       or start_reply is not None
                       or start_edit is not None):
@@ -919,7 +957,25 @@ def _render_thread_row(msg: dict, contacts=None,
                              msg.get("body") or "",
                              send_reaction=send_reaction,
                              start_reply=start_reply,
-                             start_edit=start_edit if not msg["incoming"] else None)
+                             start_edit=start_edit if not msg["incoming"] else None,
+                             open_picker=open_picker,
+                             own_reactions=own_reactions)
+
+    # XEP-0444 reactions sit as small chips OVERLAID on the bubble's
+    # bottom corner (iMessage-style tapbacks) rather than a separate row.
+    reactions = _build_reactions_overlay(msg, own_jid, open_picker)
+    if reactions is not None:
+        overlay = Gtk.Overlay()
+        overlay.set_child(bubble_box)
+        overlay.add_overlay(reactions)
+        content = overlay
+    else:
+        content = bubble_box
+    content.set_halign(align)
+    content.set_margin_start(12)
+    content.set_margin_end(12)
+    content.set_margin_top(4)
+    content.set_margin_bottom(4)
 
     row = Gtk.ListBoxRow(selectable=False, activatable=False)
     if sender_label is not None:
@@ -927,55 +983,93 @@ def _render_thread_row(msg: dict, contacts=None,
         # caption sits directly above its message bubble.
         wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         wrap.append(sender_label)
-        wrap.append(bubble_box)
+        wrap.append(content)
         row.set_child(wrap)
     else:
-        row.set_child(bubble_box)
+        row.set_child(content)
     row.set_margin_top(2)
     row.set_margin_bottom(2)
     return row
 
 
-def _build_reactions_strip(msg: dict) -> Gtk.Widget | None:
-    """Aggregate reactions_json (per-sender lists) into a single
-    counted-emoji row. Returns None when there are no reactions."""
+def _decode_reactions(msg: dict) -> dict:
+    """Parse reactions_json into { sender_jid: [emojis] }, or {}."""
     import json
     raw = msg.get("reactions_json")
     if not raw:
-        return None
+        return {}
     try:
-        by_sender = json.loads(raw)
+        data = json.loads(raw)
     except (ValueError, TypeError):
-        return None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _own_reactions_for(msg: dict, own_jid: str | None) -> set[str]:
+    if not own_jid:
+        return set()
+    return set(_decode_reactions(msg).get(own_jid, []))
+
+
+def _build_reactions_overlay(msg: dict, own_jid: str | None = None,
+                             open_picker=None) -> Gtk.Widget | None:
+    """Aggregate reactions_json into counted-emoji chips that float over
+    the bubble's bottom corner. Returns None when there are no reactions.
+
+    Each chip opens the full picker on click; the user's own reactions
+    are tinted with the accent so they can see what they gave at a
+    glance."""
+    by_sender = _decode_reactions(msg)
     counts: dict[str, int] = {}
     for emojis in by_sender.values():
         for e in emojis or []:
             counts[e] = counts.get(e, 0) + 1
     if not counts:
         return None
-    strip = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-    strip.set_halign(Gtk.Align.START if msg["incoming"] else Gtk.Align.END)
+    mine = set(by_sender.get(own_jid, [])) if own_jid else set()
+    target_id = msg.get("xmpp_id") or ""
+
+    box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=3)
+    box.add_css_class("reaction-overlay")
+    # Bottom-left corner for every bubble: the timestamp footer sits at
+    # the bottom-right (xalign=1), so anchoring left keeps the two clear.
+    box.set_halign(Gtk.Align.START)
+    box.set_valign(Gtk.Align.END)
     for emoji, n in counts.items():
         text = emoji if n == 1 else f"{emoji} {n}"
-        pill = Gtk.Label(label=text)
-        pill.add_css_class("reaction-pill")
-        strip.append(pill)
-    return strip
+        if open_picker is not None and target_id:
+            chip = Gtk.Button(label=text)
+            chip.add_css_class("flat")
+            chip.connect("clicked", lambda *_, t=target_id: open_picker(t))
+        else:
+            chip = Gtk.Label(label=text)
+        chip.add_css_class("reaction-chip")
+        if emoji in mine:
+            chip.add_css_class("reaction-chip-mine")
+        box.append(chip)
+    return box
 
 
 def _attach_message_menu(widget: Gtk.Widget, target_id: str,
                          target_body: str,
                          send_reaction=None, start_reply=None,
-                         start_edit=None) -> None:
+                         start_edit=None, open_picker=None,
+                         own_reactions: set | None = None) -> None:
     """Wire long-press + right-click on ``widget`` to a popover with
     the XEP-0444 quick-emoji row and an XEP-0461 "Reply" action.
 
     ``send_reaction(target_id, [emoji])`` — emoji set REPLACES that
     sender's prior reactions on the target message.
 
+    ``open_picker(target_id)`` — opens the full emoji picker sheet.
+
+    ``own_reactions`` — the user's current reactions on this message, so
+    a quick-pick of an emoji they already gave toggles it off.
+
     ``start_reply(target_id, target_body)`` — pages stage the next
     composed message as a quote-reply to this row.
     """
+    own = own_reactions or set()
     popover = Gtk.Popover.new()
     popover.set_parent(widget)
     popover.set_has_arrow(True)
@@ -987,11 +1081,24 @@ def _attach_message_menu(widget: Gtk.Widget, target_id: str,
         for emoji in _QUICK_REACTIONS:
             btn = Gtk.Button(label=emoji)
             btn.add_css_class("flat")
+            if emoji in own:
+                btn.add_css_class("reaction-picker-mine")
             def _on_emoji(_b, e=emoji):
-                send_reaction(target_id, [e])
+                # Toggle off if it's the user's only reaction, else replace.
+                send_reaction(target_id, [] if own == {e} else [e])
                 popover.popdown()
             btn.connect("clicked", _on_emoji)
             emoji_row.append(btn)
+        # "More…" opens the full picker / reactor summary.
+        if open_picker is not None:
+            more_btn = Gtk.Button.new_from_icon_name("list-add-symbolic")
+            more_btn.add_css_class("flat")
+            more_btn.set_tooltip_text("More reactions")
+            def _on_more(_b):
+                popover.popdown()
+                open_picker(target_id)
+            more_btn.connect("clicked", _on_more)
+            emoji_row.append(more_btn)
         column.append(emoji_row)
     if start_reply is not None:
         reply_btn = Gtk.Button(label="Reply")

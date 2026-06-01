@@ -258,6 +258,22 @@ class MessageStore:
             )
             return True
 
+    def reactions_for(self, target_xmpp_id: str) -> dict[str, list[str]]:
+        """Return the { sender_jid: [emojis] } map for a message, or {}."""
+        import json
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT reactions_json FROM messages WHERE xmpp_id=? LIMIT 1",
+                (target_xmpp_id,))
+            row = cur.fetchone()
+        if row is None or not row["reactions_json"]:
+            return {}
+        try:
+            data = json.loads(row["reactions_json"])
+        except (ValueError, TypeError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
     def set_delivery_state(self, xmpp_id: str, state: str) -> None:
         """Update delivery_state for an outgoing message keyed by its
         stanza id. No-op if no row matches — receipts can race ahead of

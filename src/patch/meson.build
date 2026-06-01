@@ -54,8 +54,10 @@ python.install_sources(
     'dialogs/add_contact_dialog.py',
     'dialogs/adhoc_dialog.py',
     'dialogs/call_dialog.py',
+    'dialogs/group_contacts_dialog.py',
     'dialogs/new_message_dialog.py',
     'dialogs/preferences_dialog.py',
+    'dialogs/reaction_picker.py',
   ),
   subdir: meson.project_name() / 'dialogs',
 )

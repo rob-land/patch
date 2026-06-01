@@ -11,6 +11,7 @@
     <file preprocess="xml-stripblanks" alias="ui/preferences-dialog.ui">preferences-dialog.ui</file>
     <file preprocess="xml-stripblanks" alias="ui/new-message-dialog.ui">new-message-dialog.ui</file>
     <file preprocess="xml-stripblanks" alias="ui/add-contact-dialog.ui">add-contact-dialog.ui</file>
+    <file preprocess="xml-stripblanks" alias="ui/group-contacts-dialog.ui">group-contacts-dialog.ui</file>
     <file alias="ui/style.css">style.css</file>
   </gresource>
 </gresources>

@@ -11,6 +11,7 @@ blueprint_sources = files(
   'preferences-dialog.blp',
   'new-message-dialog.blp',
   'add-contact-dialog.blp',
+  'group-contacts-dialog.blp',
 )
 
 blueprints = custom_target('blueprints',
