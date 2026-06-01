@@ -21,8 +21,10 @@ App ID: `land.rob.patch`. License: GPL-3.0-or-later.
   Cheogram group-SMS body parsing. SQLite cache for offline display.
 - **Phase 1.5** ✅ Reconnection with exponential backoff + Adw.Banner
   status surface, desktop notifications on inbound messages, MAM
-  catch-up on connect (off by default — nbxmpp 7.2 parse-finished bug
-  on large batches; opt in with `PATCH_MAM_CATCHUP=1`), Send Message
+  catch-up on connect (on by default, paginated via RSM in pages of
+  `MAM_PAGE`=20 to sidestep the nbxmpp 7.2 large-batch parse-finished
+  bug; resumes from the latest cached message minus `MAM_RESUME_OVERLAP`
+  with xmpp_id dedup; `PATCH_MAM_CATCHUP=0` to opt out), Send Message
   shortcut on the dialer for new conversations.
 - **Phase 2** ✅ UnifiedPush receiver — full end-to-end including the
   cold-start activation race fix. `org.unifiedpush.Connector1` D-Bus

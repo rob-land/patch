@@ -957,6 +957,15 @@ class XmppClient(GObject.Object):
     # cursor until complete=True.
     MAM_PAGE = 20
 
+    # When resuming from the latest cached message we rewind the start
+    # bound by this much. latest_timestamp() is MAX over all rows
+    # including our own outgoing messages, so a peer message that was
+    # archived a moment BEFORE one of our sends (e.g. delivered only to
+    # another device while this one was off) would otherwise fall before
+    # the bound and never be fetched. Re-scanning a short overlap closes
+    # that gap; xmpp_id dedup makes the re-fetched rows free.
+    MAM_RESUME_OVERLAP = 600  # seconds
+
     @property
     def mam_sync_active(self) -> bool:
         return self._mam_syncing
@@ -985,7 +994,9 @@ class XmppClient(GObject.Object):
         else:
             latest = self._store.latest_timestamp()
             if latest > 0:
-                start = dt.datetime.fromtimestamp(latest, tz=dt.timezone.utc)
+                start = dt.datetime.fromtimestamp(
+                    max(0.0, latest - self.MAM_RESUME_OVERLAP),
+                    tz=dt.timezone.utc)
             else:
                 # First-ever connect: limit to the last day unless the
                 # user explicitly opted into full archive sync.
