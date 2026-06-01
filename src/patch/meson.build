@@ -51,6 +51,7 @@ python.install_sources(
   files(
     'dialogs/__init__.py',
     'dialogs/account_dialog.py',
+    'dialogs/add_contact_dialog.py',
     'dialogs/adhoc_dialog.py',
     'dialogs/call_dialog.py',
     'dialogs/new_message_dialog.py',
