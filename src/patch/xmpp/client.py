@@ -476,8 +476,14 @@ class XmppClient(GObject.Object):
         # sidestepped. PATCH_MAM_CATCHUP=0 to opt OUT (e.g. for debugging).
         import os
         if os.environ.get("PATCH_MAM_CATCHUP", "1") == "1":
-            self.request_history_sync(
-                all_history=self._settings.get_boolean("sync-all-history"))
+            # Always incremental on connect: resume from the latest
+            # cached message so anything missed while offline lands on
+            # the first page or two. A full-archive backfill is a
+            # deliberate one-shot (app.sync-history), never per-connect —
+            # walking from the oldest message on every connect is slow
+            # and on a phone often disconnects before reaching the
+            # recent tail, so newly-missed messages never arrive.
+            self.request_history_sync()
 
     def _on_login_successful(self, _client, _signal_name):
         # Only fires in login-test mode (see _on_connected). Kept as a

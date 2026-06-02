@@ -28,14 +28,9 @@ template $PatchPreferencesDialog: Adw.PreferencesDialog {
       title: _("Message History");
       description: _("Patch uses the server archive to catch up on SMS and MMS when it connects.");
 
-      Adw.SwitchRow sync_all_history_row {
-        title: _("Sync all history on connect");
-        subtitle: _("Fetch the full server archive instead of only new messages. This can take a while on large accounts.");
-      }
-
       Adw.ActionRow {
         title: _("Sync All History Now");
-        subtitle: _("Request the full server archive immediately.");
+        subtitle: _("Patch catches up on new messages automatically when it connects. Use this to pull the full server archive — e.g. on a new device.");
 
         [suffix]
         Gtk.Button {

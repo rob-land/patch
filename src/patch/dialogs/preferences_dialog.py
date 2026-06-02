@@ -26,7 +26,6 @@ class PatchPreferencesDialog(Adw.PreferencesDialog):
     endpoint_row:    Adw.ActionRow = Gtk.Template.Child()
     log_path_row:    Adw.ActionRow = Gtk.Template.Child()
     blocked_group:   Adw.PreferencesGroup = Gtk.Template.Child()
-    sync_all_history_row: Adw.SwitchRow = Gtk.Template.Child()
 
     def __init__(self, xmpp=None, account=None):
         super().__init__()
@@ -40,9 +39,6 @@ class PatchPreferencesDialog(Adw.PreferencesDialog):
         self.distributor_row.set_subtitle(dist)
         self.endpoint_row.set_subtitle(ep)
         self.log_path_row.set_subtitle(log_path())
-        self._settings.bind(
-            "sync-all-history", self.sync_all_history_row, "active",
-            Gio.SettingsBindFlags.DEFAULT)
         GLib.idle_add(self._fetch_block_list)
 
     def _fetch_block_list(self) -> bool:
