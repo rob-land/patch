@@ -442,7 +442,7 @@ class PatchMessagesPage(Adw.Bin):
         window = self.get_root() if isinstance(self.get_root(), Gtk.Window) else None
         if window is None:
             return
-        dialog = PatchNewMessageDialog(self._account, window)
+        dialog = PatchNewMessageDialog(self._account, window, self._contacts)
         dialog.present(window)
 
     # -- outbound attach -------------------------------------------------

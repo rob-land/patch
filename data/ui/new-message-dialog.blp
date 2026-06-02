@@ -4,6 +4,7 @@ using Adw 1;
 template $PatchNewMessageDialog: Adw.Dialog {
   title: _("New message");
   content-width: 360;
+  content-height: 540;
 
   child: Adw.ToolbarView {
     [top]
@@ -13,20 +14,74 @@ template $PatchNewMessageDialog: Adw.Dialog {
       };
     }
 
-    content: Adw.PreferencesPage {
+    content: Gtk.Box {
+      orientation: vertical;
+
+      // ---- Manual number entry ---------------------------------------
       Adw.PreferencesGroup {
-        description: _("Type a phone number to start a new conversation.");
+        margin-start: 12;
+        margin-end: 12;
+        margin-top: 12;
+        margin-bottom: 6;
+        description: _("Type a phone number, or pick a contact below.");
 
         Adw.EntryRow number_row {
           title: _("Number");
           input-purpose: phone;
+
+          [suffix]
+          Gtk.Button open_button {
+            valign: center;
+            label: _("Open");
+            tooltip-text: _("Start conversation");
+            styles ["suggested-action"]
+          }
+        }
+      }
+
+      // ---- Contact search + list -------------------------------------
+      Gtk.SearchEntry search_entry {
+        placeholder-text: _("Search contacts");
+        margin-start: 12;
+        margin-end: 12;
+        margin-bottom: 6;
+      }
+
+      Gtk.Stack contacts_stack {
+        vexpand: true;
+        transition-type: crossfade;
+
+        Gtk.StackPage {
+          name: "list";
+
+          child: Gtk.ScrolledWindow {
+            hscrollbar-policy: never;
+
+            child: Adw.Clamp {
+              child: Gtk.Box {
+                orientation: vertical;
+                margin-start: 12;
+                margin-end: 12;
+                margin-bottom: 12;
+
+                Gtk.ListBox contacts_list {
+                  selection-mode: none;
+                  valign: start;
+                  styles ["boxed-list"]
+                }
+              };
+            };
+          };
         }
 
-        Gtk.Button open_button {
-          label: _("Open");
-          halign: center;
-          margin-top: 8;
-          styles ["pill", "suggested-action"]
+        Gtk.StackPage {
+          name: "empty";
+
+          child: Adw.StatusPage empty_page {
+            icon-name: "system-users-symbolic";
+            title: _("No contacts");
+            description: _("Contacts from your address book appear here.");
+          };
         }
       }
     };
