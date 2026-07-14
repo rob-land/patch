@@ -28,8 +28,8 @@
     <control>touch</control>
   </recommends>
   <developer_name>Rob</developer_name>
-  <url type="homepage">https://codeberg.org/robland/patch</url>
-  <url type="bugtracker">https://codeberg.org/robland/patch/issues</url>
+  <url type="homepage">https://github.com/rob-land/patch</url>
+  <url type="bugtracker">https://github.com/rob-land/patch/issues</url>
   <content_rating type="oars-1.1"/>
   <releases>
     <release version="0.1.0" date="2026-05-21">

@@ -93,8 +93,7 @@ App ID: `land.rob.patch`. License: GPL-3.0-or-later.
 
 ## Companion server module
 
-`mod_cloud_notify_unifiedpush` lives at
-`/home/rob/projects/xmpp-up/prosody-mod-cloud-notify-unifiedpush/` and
+`mod_cloud_notify_unifiedpush` lives in a separate private repo and
 is deployed by the Selfhost ansible role
 (`selfhost/ansible/roles/prosody/`). It loads on `chat.rob.land` and
 shares the RFC 8291 wire format with the `push/decrypt.py` here; both

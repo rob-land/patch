@@ -22,7 +22,6 @@ __pycache__/
 
 # Claude workspace — track shared settings, ignore everything else
 .claude/*
-!.claude/settings.json
 
 # Backup from flatpak-pip-generator runs
 build-aux/flatpak/python3-deps.json.bak
