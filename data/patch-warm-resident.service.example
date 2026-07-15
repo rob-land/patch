@@ -13,6 +13,12 @@
 Description=Patch — JMP.chat client (warm-resident)
 After=kunifiedpush-distributor.service
 Wants=kunifiedpush-distributor.service
+# Patch is a GUI flatpak: starting it before the graphical session
+# D-Bus-activates xdg-desktop-portal without DISPLAY/WAYLAND_DISPLAY
+# in the activation environment, which silently breaks OpenURI
+# (browser launches) for every app for the rest of the session.
+After=graphical-session.target
+PartOf=graphical-session.target
 
 [Service]
 Type=exec
@@ -33,4 +39,4 @@ MemoryLow=128M
 MemorySwapMax=0
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
